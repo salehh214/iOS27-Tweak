@@ -1,7 +1,9 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import "iOS27Prefs.h"
 
-// Private SpringBoard Interfaces for Home Screen
+static CGFloat gGlassAlpha = 0.25;
+
 @interface SBIconView : UIView
 - (void)setLabelHidden:(BOOL)hidden;
 @end
@@ -10,7 +12,6 @@
 @end
 
 @interface SBFloatyFolderView : UIView
-- (void)_setContinuousCornerRadius:(CGFloat)radius;
 @end
 
 @interface SBFolderIconImageView : UIView
@@ -19,18 +20,13 @@
 @interface SBHomeScreenViewController : UIViewController
 @end
 
-@interface SBMainWorkspace : NSObject
-+ (instancetype)sharedInstance;
-- (void)presentSpotlightFromSource:(NSUInteger)source animated:(BOOL)animated;
-@end
-
 @interface SBFFluidBehaviorSettings : NSObject
 - (void)setResponse:(double)response;
 - (void)setDampingRatio:(double)damping;
 @end
 
-static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat whiteAlpha) {
-    targetView.backgroundColor = [UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:whiteAlpha];
+static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alpha) {
+    targetView.backgroundColor = [UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:alpha];
     targetView.layer.cornerRadius = cornerRadius;
     targetView.layer.cornerCurve = kCACornerCurveContinuous;
     targetView.layer.borderWidth = 1.0;
@@ -38,48 +34,39 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat whi
     targetView.clipsToBounds = YES;
 }
 
-%hook SBIconView
+%group HomeScreenHooks
 
+%hook SBIconView
 - (void)setLabelHidden:(BOOL)hidden {
-    // Hamesha icon labels hide rakhein clean iOS 27 look aur fast rendering ke liye
     %orig(YES);
 }
-
 - (void)layoutSubviews {
     %orig;
     self.transform = CGAffineTransformMakeScale(0.94, 0.94);
 }
-
 %end
 
 %hook SBDockView
-
 - (void)layoutSubviews {
     %orig;
-
-    // Default heavy blur background view ko hide karein
     UIView *bgView = [self valueForKey:@"_backgroundView"];
     if (bgView) {
         bgView.hidden = YES;
         bgView.alpha = 0.0;
     }
-
-    // Lightweight Fake-Blur Glass View inject karein (Tag: 27001)
     UIView *glassDock = [self viewWithTag:27001];
     if (!glassDock) {
         glassDock = [[UIView alloc] initWithFrame:CGRectZero];
         glassDock.tag = 27001;
         glassDock.userInteractionEnabled = NO;
-        ApplyFakeGlass(glassDock, 34.0, 0.25);
+        ApplyFakeGlass(glassDock, 34.0, gGlassAlpha);
         [self insertSubview:glassDock atIndex:0];
     }
     glassDock.frame = CGRectInset(self.bounds, 10.0, 6.0);
 }
-
 %end
 
 %hook SBFloatyFolderView
-
 - (void)layoutSubviews {
     %orig;
     UIView *bgView = [self valueForKey:@"_backgroundView"];
@@ -87,14 +74,12 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat whi
         for (UIView *sub in bgView.subviews) {
             sub.hidden = YES;
         }
-        ApplyFakeGlass(bgView, 38.0, 0.28);
+        ApplyFakeGlass(bgView, 38.0, gGlassAlpha);
     }
 }
-
 %end
 
 %hook SBFolderIconImageView
-
 - (void)layoutSubviews {
     %orig;
     UIView *bgView = [self valueForKey:@"_backgroundView"];
@@ -102,18 +87,14 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat whi
         for (UIView *sub in bgView.subviews) {
             sub.hidden = YES;
         }
-        ApplyFakeGlass(bgView, 16.0, 0.25);
+        ApplyFakeGlass(bgView, 16.0, gGlassAlpha);
     }
 }
-
 %end
 
 %hook SBHomeScreenViewController
-
 - (void)viewDidLoad {
     %orig;
-
-    // Minimalist iOS 27 App Drawer Pill Button above Dock
     if (![self.view viewWithTag:27002]) {
         UIButton *drawerPill = [UIButton buttonWithType:UIButtonTypeCustom];
         drawerPill.tag = 27002;
@@ -122,8 +103,7 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat whi
         [drawerPill setTitle:@"⠿ Apps 27" forState:UIControlStateNormal];
         drawerPill.titleLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold];
         [drawerPill setTitleColor:[UIColor colorWithWhite:1.0 alpha:0.9] forState:UIControlStateNormal];
-        ApplyFakeGlass(drawerPill, 13.0, 0.22);
-
+        ApplyFakeGlass(drawerPill, 13.0, gGlassAlpha);
         [drawerPill addTarget:self action:@selector(ios27_openAppDrawer) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:drawerPill];
     }
@@ -131,37 +111,35 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat whi
 
 %new
 - (void)ios27_openAppDrawer {
-    // Lightweight minimalist App Drawer Alert Sheet (Zero RAM overhead)
     UIAlertController *drawer = [UIAlertController alertControllerWithTitle:@"iOS 27 Quick Drawer"
-                                                                    message:@"Select a quick system action or launch application categories"
+                                                                    message:@"Select a quick action"
                                                              preferredStyle:UIAlertControllerStyleActionSheet];
-
     UIApplication *app = [UIApplication sharedApplication];
-
     [drawer addAction:[UIAlertAction actionWithTitle:@"Settings" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [app openURL:[NSURL URLWithString:@"App-Prefs:"] options:@{} completionHandler:nil];
     }]];
-
     [drawer addAction:[UIAlertAction actionWithTitle:@"Safari Browser" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [app openURL:[NSURL URLWithString:@"https://"] options:@{} completionHandler:nil];
     }]];
-
     [drawer addAction:[UIAlertAction actionWithTitle:@"Close Drawer" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:drawer animated:NO completion:nil];
 }
-
 %end
 
-// Anti-Lag SpringBoard Physics Optimization for 2GB RAM
 %hook SBFFluidBehaviorSettings
-
 - (void)setResponse:(double)response {
-    // Faster spring response to reduce GPU frame rendering time
     %orig(0.22);
 }
-
 - (void)setDampingRatio:(double)damping {
     %orig(1.0);
 }
+%end
 
 %end
+
+%ctor {
+    if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableHomeScreen", YES)) {
+        gGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.25);
+        %init(HomeScreenHooks);
+    }
+}
