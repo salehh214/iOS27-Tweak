@@ -12,3 +12,6 @@ iOS27_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics
 
 include $(THEOS)/makefiles/tweak.mk
+
+SUBPROJECTS += iOS27Prefs
+include $(THEOS_MAKE_PATH)/aggregate.mk
