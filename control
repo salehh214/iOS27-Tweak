@@ -1,9 +1,9 @@
 Package: com.elite.ios27
 Name: iOS 27 Glass UI (Rootless)
-Version: 1.0.0
+Version: 1.1.0
 Architecture: iphoneos-arm64
-Description: Complete iOS 27 futuristic glass redesign optimized for iOS 15.8.8 (2GB RAM devices).
+Description: Complete iOS 27 futuristic glass redesign with Settings menu for iOS 15.8.8 Rootless.
 Maintainer: Elite Tweak Dev
 Author: Elite Tweak Dev
 Section: Tweaks
-Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 15.0)
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 15.0), preferenceloader
