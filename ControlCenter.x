@@ -1,5 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import "iOS27Prefs.h"
+
+static CGFloat gCCGlassAlpha = 0.28;
 
 @interface CCUIContentModuleContentContainerView : UIView
 @end
@@ -11,7 +14,6 @@
 @end
 
 static void ApplyCCGlassStyle(UIView *view, CGFloat radius) {
-    // Strip heavy Material/Blur subviews inside CC containers
     for (UIView *sub in view.subviews) {
         NSString *clsName = NSStringFromClass([sub class]);
         if ([clsName containsString:@"MTMaterialView"] || [clsName containsString:@"UIVisualEffectView"]) {
@@ -19,8 +21,7 @@ static void ApplyCCGlassStyle(UIView *view, CGFloat radius) {
             sub.alpha = 0.0;
         }
     }
-
-    view.backgroundColor = [UIColor colorWithRed:0.10 green:0.14 blue:0.22 alpha:0.28];
+    view.backgroundColor = [UIColor colorWithRed:0.10 green:0.14 blue:0.22 alpha:gCCGlassAlpha];
     view.layer.cornerRadius = radius;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.borderWidth = 1.1;
@@ -28,34 +29,38 @@ static void ApplyCCGlassStyle(UIView *view, CGFloat radius) {
     view.clipsToBounds = YES;
 }
 
-%hook CCUIContentModuleContentContainerView
+%group ControlCenterHooks
 
+%hook CCUIContentModuleContentContainerView
 - (void)layoutSubviews {
     %orig;
     ApplyCCGlassStyle(self, 28.0);
 }
-
 %end
 
 %hook CCUIBaseSliderView
-
 - (void)layoutSubviews {
     %orig;
     ApplyCCGlassStyle(self, 28.0);
 }
-
 %end
 
 %hook CCUIHeaderPocketView
-
 - (void)layoutSubviews {
     %orig;
-    // Top Control Center status header ko clean aur lag-free rakhein
     for (UIView *sub in self.subviews) {
         if ([NSStringFromClass([sub class]) containsString:@"Material"]) {
             sub.hidden = YES;
         }
     }
 }
+%end
 
 %end
+
+%ctor {
+    if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableCC", YES)) {
+        gCCGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.28);
+        %init(ControlCenterHooks);
+    }
+}
