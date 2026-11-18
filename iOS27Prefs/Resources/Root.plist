@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Master Control</string>
+			<key>footerText</key>
+			<string>iOS 27 Fake-Glass Engine for iOS 15.8.8 (Zero-Blur 2GB RAM Optimized).</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kEnabled</string>
+			<key>label</key>
+			<string>Enable iOS 27 Tweak</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Modules</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kEnableHomeScreen</string>
+			<key>label</key>
+			<string>Home Screen &amp; App Drawer</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kEnableLockScreen</string>
+			<key>label</key>
+			<string>Modern Lock Screen &amp; HUD</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kEnableCC</string>
+			<key>label</key>
+			<string>Glass Control Center</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Fake-Glass Transparency (Alpha)</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>0.25</real>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kGlassAlpha</string>
+			<key>min</key>
+			<real>0.10</real>
+			<key>max</key>
+			<real>0.55</real>
+			<key>showValue</key>
+			<true/>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Apply Changes</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Respring SpringBoard</string>
+			<key>action</key>
+			<string>respringDevice</string>
+		</dict>
+	</array>
+	<key>title</key>
+	<string>iOS 27 Glass UI</string>
+</dict>
+</plist>
