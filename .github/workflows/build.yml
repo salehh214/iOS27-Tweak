@@ -1,41 +1,8 @@
-name: Build iOS 27 Rootless Tweak
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
-jobs:
-  build-rootless-deb:
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout Repository Code
-        uses: actions/checkout@v4
-
-      - name: Install Packaging Tools & Dependencies
-        run: |
-          brew update
-          brew install ldid xz dpkg
-
-      - name: Setup Theos & Patched iOS SDK
+- name: Setup Theos & Patched iOS SDK
         run: |
           export THEOS=$HOME/theos
           git clone --recursive https://github.com/theos/theos.git $THEOS
           
-          # Fetch latest patched iOS SDKs from Theos SDK repository
-          rm -rf $THEOS/sdks
-          git clone --depth 1 https://github.com/theos/sdks.git $THEOS/sdks
-
-      - name: Compile Rootless Tweak Package (.deb)
-        run: |
-          export THEOS=$HOME/theos
-          make clean
-          make package FINALPACKAGE=1
-
-      - name: Upload Compiled Rootless .deb Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: iOS27-Rootless-Package
-          path: packages/*.deb
-          if-no-files-found: error
+          # Download patched iPhoneOS16.5 SDK (includes PrivateFrameworks like Preferences.framework)
+          rm -rf $THEOS/sdks/*
+          curl -L https://github.com/theos/sdks/archive/refs/heads/master.tar.gz | tar -xz -C $THEOS/sdks --strip-components=1
