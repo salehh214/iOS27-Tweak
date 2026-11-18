@@ -1,5 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import "iOS27Prefs.h"
+
+static CGFloat gLSGlassAlpha = 0.25;
 
 @interface SBFLockScreenDateView : UIView
 @end
@@ -7,12 +10,11 @@
 @interface CSQuickActionsButton : UIControl
 @end
 
-%hook SBFLockScreenDateView
+%group LockScreenHooks
 
+%hook SBFLockScreenDateView
 - (void)layoutSubviews {
     %orig;
-
-    // Time Label ko futuristic rounded font aur subtle cyan glow dein
     UILabel *timeLabel = [self valueForKey:@"_timeLabel"];
     if ([timeLabel isKindOfClass:[UILabel class]]) {
         UIFontDescriptor *desc = [[UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy].fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
@@ -22,12 +24,11 @@
         timeLabel.textColor = [UIColor colorWithRed:0.88 green:0.96 blue:1.0 alpha:0.95];
     }
 
-    // Minimalist iOS 27 Glass Widget Pill (Tag: 27101)
     UIView *widgetPill = [self viewWithTag:27101];
     if (!widgetPill) {
         widgetPill = [[UIView alloc] initWithFrame:CGRectZero];
         widgetPill.tag = 27101;
-        widgetPill.backgroundColor = [UIColor colorWithRed:0.10 green:0.15 blue:0.22 alpha:0.25];
+        widgetPill.backgroundColor = [UIColor colorWithRed:0.10 green:0.15 blue:0.22 alpha:gLSGlassAlpha];
         widgetPill.layer.cornerRadius = 18.0;
         widgetPill.layer.cornerCurve = kCACornerCurveContinuous;
         widgetPill.layer.borderWidth = 1.0;
@@ -58,24 +59,29 @@
         hudLabel.text = [NSString stringWithFormat:@"⚡ iOS 27 • %d%% • Low-RAM Mode", batteryPercent];
     }
 }
-
 %end
 
 %hook CSQuickActionsButton
-
 - (void)layoutSubviews {
     %orig;
-    // Remove heavy blur background from Lock Screen Flashlight & Camera buttons
     for (UIView *sub in self.subviews) {
         if ([NSStringFromClass([sub class]) containsString:@"Material"] || [NSStringFromClass([sub class]) containsString:@"Effect"]) {
             sub.hidden = YES;
         }
     }
-    self.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    self.backgroundColor = [UIColor colorWithWhite:1.0 alpha:gLSGlassAlpha];
     self.layer.cornerRadius = self.bounds.size.width / 2.0;
     self.layer.borderWidth = 1.0;
     self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
     self.clipsToBounds = YES;
 }
+%end
 
 %end
+
+%ctor {
+    if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableLockScreen", YES)) {
+        gLSGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.25);
+        %init(LockScreenHooks);
+    }
+}
