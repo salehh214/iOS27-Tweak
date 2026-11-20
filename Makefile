@@ -9,7 +9,7 @@ TWEAK_NAME = iOS27
 
 iOS27_FILES = HomeScreen.x LockScreen.x ControlCenter.x WallpaperEditor.x HomeScreenEditor.x
 iOS27_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics ImageIO
+iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics ImageIO AVFoundation
 
 include $(THEOS)/makefiles/tweak.mk
 
