@@ -18,20 +18,33 @@ static CGFloat gGlassAlpha = 0.25;
 @end
 
 @interface SBIconListPageControl : UIView
-- (void)ios27_openSpotlightSearch;
+- (void)ios27_openSpotlightSearch:(UIButton *)sender;
 @end
 
 @interface SBSearchGesture : NSObject
++ (instancetype)sharedInstance;
 - (void)revealAnimated:(BOOL)animated;
+@end
+
+@interface SBSearchPresenter : NSObject
+- (void)presentSearchAnimated:(BOOL)animated;
 @end
 
 @interface SBRootFolderController : UIViewController
 - (void)presentSpotlightAnimated:(BOOL)animated;
+- (SBSearchGesture *)searchGesture;
+@end
+
+@interface SBHIconManager : NSObject
+- (SBRootFolderController *)rootFolderController;
+- (SBSearchPresenter *)searchPresenter;
 @end
 
 @interface SBIconController : UIViewController
 + (instancetype)sharedInstance;
+- (SBHIconManager *)iconManager;
 - (SBSearchGesture *)searchGesture;
+- (SBSearchPresenter *)searchPresenter;
 - (SBRootFolderController *)_rootFolderController;
 @end
 
@@ -53,7 +66,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     targetView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.42].CGColor;
     targetView.clipsToBounds = YES;
 
-    // Lightweight Glassy Sheen (Zero Blur / Zero Lag)
     CAGradientLayer *sheen = nil;
     for (CALayer *layer in targetView.layer.sublayers) {
         if ([layer.name isEqualToString:@"iOS27GlassSheen"]) {
@@ -136,13 +148,11 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 }
 %end
 
-// Replace Page Dots directly with iOS 16/27 Glass Search Pill (Zero Overlap)
 %hook SBIconListPageControl
 
 - (void)layoutSubviews {
     %orig;
 
-    // Default page dots hide karein
     for (UIView *sub in self.subviews) {
         if (sub.tag != 27005) {
             sub.hidden = YES;
@@ -167,47 +177,99 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         [searchPill setTitle:@" Search" forState:UIControlStateNormal];
         searchPill.titleLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightSemibold];
         [searchPill setTitleColor:[UIColor colorWithWhite:1.0 alpha:0.95] forState:UIControlStateNormal];
-        [searchPill addTarget:self action:@selector(ios27_openSpotlightSearch) forControlEvents:UIControlEventTouchUpInside];
+        [searchPill addTarget:self action:@selector(ios27_openSpotlightSearch:) forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:searchPill];
     }
 
-    CGFloat pillW = 84.0;
+    CGFloat pillW = 86.0;
     CGFloat pillH = 26.0;
     searchPill.frame = CGRectMake((self.bounds.size.width - pillW) / 2.0, (self.bounds.size.height - pillH) / 2.0, pillW, pillH);
     ApplyFakeGlass(searchPill, pillH / 2.0, gGlassAlpha);
 }
 
+// Directly route touches to searchPill so PageControl does not swallow taps
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *searchPill = [self viewWithTag:27005];
+    if (searchPill && !searchPill.hidden && CGRectContainsPoint(CGRectInset(searchPill.frame, -12.0, -10.0), point)) {
+        return searchPill;
+    }
+    return %orig;
+}
+
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *searchPill = [self viewWithTag:27005];
-    if (searchPill && CGRectContainsPoint(CGRectInset(searchPill.frame, -8.0, -8.0), point)) {
+    if (searchPill && !searchPill.hidden && CGRectContainsPoint(CGRectInset(searchPill.frame, -12.0, -10.0), point)) {
         return YES;
     }
     return %orig;
 }
 
 %new
-- (void)ios27_openSpotlightSearch {
-    SBIconController *iconController = [%c(SBIconController) sharedInstance];
+- (void)ios27_openSpotlightSearch:(UIButton *)sender {
+    // Quick visual feedback on tap
+    [UIView animateWithDuration:0.08 animations:^{
+        sender.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    } completion:^(BOOL finished) {
+        [UIView animateWithDuration:0.12 animations:^{
+            sender.transform = CGAffineTransformIdentity;
+        }];
+    }];
 
-    // Method 1: SpringBoard native Search Gesture (iOS 15 primary)
-    if ([iconController respondsToSelector:@selector(searchGesture)]) {
-        SBSearchGesture *gesture = [iconController searchGesture];
+    SBIconController *ic = [%c(SBIconController) sharedInstance];
+
+    // 1. iOS 15 Primary: SBSearchPresenter on SBIconController
+    if ([ic respondsToSelector:@selector(searchPresenter)]) {
+        SBSearchPresenter *sp = [ic searchPresenter];
+        if (sp && [sp respondsToSelector:@selector(presentSearchAnimated:)]) {
+            [sp presentSearchAnimated:YES];
+            return;
+        }
+    }
+
+    // 2. iOS 15 SBHIconManager -> searchPresenter / rootFolderController
+    SBHIconManager *manager = [ic respondsToSelector:@selector(iconManager)] ? [ic iconManager] : nil;
+    if (manager) {
+        if ([manager respondsToSelector:@selector(searchPresenter)]) {
+            SBSearchPresenter *sp = [manager searchPresenter];
+            if (sp && [sp respondsToSelector:@selector(presentSearchAnimated:)]) {
+                [sp presentSearchAnimated:YES];
+                return;
+            }
+        }
+        SBRootFolderController *rfc = [manager respondsToSelector:@selector(rootFolderController)] ? [manager rootFolderController] : nil;
+        if (rfc) {
+            if ([rfc respondsToSelector:@selector(presentSpotlightAnimated:)]) {
+                [rfc presentSpotlightAnimated:YES];
+                return;
+            }
+            @try {
+                SBSearchGesture *gesture = [rfc valueForKey:@"_searchGesture"];
+                if (gesture && [gesture respondsToSelector:@selector(revealAnimated:)]) {
+                    [gesture revealAnimated:YES];
+                    return;
+                }
+            } @catch (NSException *e) {}
+        }
+    }
+
+    // 3. Direct KVC fallback on SBIconController (_searchPresenter / _searchGesture)
+    @try {
+        id sp = [ic valueForKey:@"_searchPresenter"];
+        if (sp && [sp respondsToSelector:@selector(presentSearchAnimated:)]) {
+            [sp presentSearchAnimated:YES];
+            return;
+        }
+    } @catch (NSException *e) {}
+
+    @try {
+        id gesture = [ic valueForKey:@"_searchGesture"];
         if (gesture && [gesture respondsToSelector:@selector(revealAnimated:)]) {
             [gesture revealAnimated:YES];
             return;
         }
-    }
+    } @catch (NSException *e) {}
 
-    // Method 2: Root Folder Controller Spotlight presenter
-    if ([iconController respondsToSelector:@selector(_rootFolderController)]) {
-        SBRootFolderController *rfc = [iconController _rootFolderController];
-        if (rfc && [rfc respondsToSelector:@selector(presentSpotlightAnimated:)]) {
-            [rfc presentSpotlightAnimated:YES];
-            return;
-        }
-    }
-
-    // Method 3: MainWorkspace fallback
+    // 4. Final fallback: SBMainWorkspace
     SBMainWorkspace *workspace = [%c(SBMainWorkspace) sharedInstance];
     if ([workspace respondsToSelector:@selector(presentSpotlightFromSource:animated:)]) {
         [workspace presentSpotlightFromSource:1 animated:YES];
