@@ -64,6 +64,7 @@ static CGFloat gGlassAlpha = 0.25;
 - (void)setDampingRatio:(double)damping;
 @end
 
+// Shared Fake-Glass Style for Dock, Folders & Search Pill
 static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alpha) {
     targetView.backgroundColor = [UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:alpha];
     targetView.layer.cornerRadius = cornerRadius;
@@ -94,6 +95,181 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     }
     sheen.frame = targetView.bounds;
     sheen.cornerRadius = cornerRadius;
+}
+
+// =========================================================================
+// Universal iOS 27 Liquid Glass Icon Engine (ALL System + 3rd Party Apps)
+// Zero UIVisualEffectView — Pure GPU CoreAnimation for 2GB RAM 60fps Speed
+// =========================================================================
+static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSInteger subMode, CGFloat tintHue, CGFloat tintBri) {
+    if (!iconImgView) return;
+
+    CGRect bounds = iconImgView.bounds;
+    // Apply strictly to square app icons (skips rectangular widgets & folder containers)
+    if (CGRectIsEmpty(bounds) || bounds.size.width < 32.0 || bounds.size.width > 95.0) return;
+    if (fabs(bounds.size.width - bounds.size.height) > 4.0) return;
+    if ([iconImgView isKindOfClass:NSClassFromString(@"SBFolderIconImageView")]) return;
+
+    CGFloat radius = floor(bounds.size.width * 0.225);
+
+    UIView *glassShell = [iconImgView viewWithTag:27888];
+    if (!glassShell) {
+        glassShell = [[UIView alloc] initWithFrame:bounds];
+        glassShell.tag = 27888;
+        glassShell.userInteractionEnabled = NO;
+        glassShell.clipsToBounds = YES;
+        glassShell.layer.cornerCurve = kCACornerCurveContinuous;
+        glassShell.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [iconImgView addSubview:glassShell];
+    }
+
+    BOOL sizeChanged = !CGRectEqualToRect(glassShell.bounds, bounds);
+    if (sizeChanged) {
+        glassShell.frame = bounds;
+    }
+    glassShell.layer.cornerRadius = radius;
+    glassShell.hidden = NO;
+    [iconImgView bringSubviewToFront:glassShell];
+
+    // 1. Top/Bottom Centered Liquid Glass Dome Reflection Layer
+    CAGradientLayer *domeLayer = nil;
+    // 2. Crisp Specular Rim Border Gradient Layer (Masked to Squircle Stroke)
+    CAGradientLayer *rimGrad = nil;
+
+    for (CALayer *layer in glassShell.layer.sublayers) {
+        if ([layer.name isEqualToString:@"iOS27IconDome"]) {
+            domeLayer = (CAGradientLayer *)layer;
+        } else if ([layer.name isEqualToString:@"iOS27IconSpecularRim"]) {
+            rimGrad = (CAGradientLayer *)layer;
+        }
+    }
+
+    if (!domeLayer) {
+        domeLayer = [CAGradientLayer layer];
+        domeLayer.name = @"iOS27IconDome";
+        domeLayer.startPoint = CGPointMake(0.5, 0.0);
+        domeLayer.endPoint = CGPointMake(0.5, 1.0);
+        domeLayer.locations = @[@0.0, @0.32, @0.68, @1.0];
+        [glassShell.layer insertSublayer:domeLayer atIndex:0];
+    }
+
+    if (!rimGrad) {
+        rimGrad = [CAGradientLayer layer];
+        rimGrad.name = @"iOS27IconSpecularRim";
+        rimGrad.startPoint = CGPointMake(0.25, 0.0);
+        rimGrad.endPoint = CGPointMake(0.75, 1.0);
+        rimGrad.locations = @[@0.0, @0.45, @0.75, @1.0];
+
+        CAShapeLayer *rimMask = [CAShapeLayer layer];
+        rimMask.fillColor = [UIColor clearColor].CGColor;
+        rimMask.strokeColor = [UIColor whiteColor].CGColor;
+        rimMask.lineWidth = 2.6; // Clipped by glassShell -> razor-sharp ~1.3pt glass rim
+        rimGrad.mask = rimMask;
+
+        [glassShell.layer addSublayer:rimGrad];
+    }
+
+    if (sizeChanged || CGRectIsEmpty(domeLayer.frame)) {
+        domeLayer.frame = bounds;
+        domeLayer.cornerRadius = radius;
+        rimGrad.frame = bounds;
+
+        CAShapeLayer *rimMask = (CAShapeLayer *)rimGrad.mask;
+        rimMask.frame = bounds;
+        rimMask.path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:radius].CGPath;
+    }
+
+    // Apply Mode-Specific iOS 27 Liquid Glass Material
+    if (iconStyle == 0) {
+        // MODE 0: Default Vibrant Liquid Glass (Every app keeps its colors + crystal glass dome & rim)
+        iconImgView.alpha = 1.0;
+        glassShell.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.05];
+        domeLayer.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.34].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:0.03].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor
+        ];
+        rimGrad.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.88].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.65].CGColor
+        ];
+    } else if (iconStyle == 1) {
+        // MODE 1: Dark Smoked Liquid Glass (Always / Auto)
+        iconImgView.alpha = 0.96;
+        CGFloat darkAlpha = (subMode == 0) ? 0.36 : 0.24;
+        glassShell.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.08 alpha:darkAlpha];
+        domeLayer.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:0.12].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor
+        ];
+        rimGrad.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.68].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.45].CGColor
+        ];
+    } else if (iconStyle == 2) {
+        // MODE 2: Clear Translucent Liquid Glass (Light / Dark / Auto)
+        if (subMode == 1) {
+            // Clear Dark Glass
+            iconImgView.alpha = 0.68;
+            glassShell.backgroundColor = [UIColor colorWithRed:0.06 green:0.08 blue:0.12 alpha:0.38];
+            domeLayer.colors = @[
+                (id)[UIColor colorWithWhite:1.0 alpha:0.36].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.05].CGColor,
+                (id)[UIColor colorWithWhite:0.0 alpha:0.10].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor
+            ];
+            rimGrad.colors = @[
+                (id)[UIColor colorWithWhite:1.0 alpha:0.85].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.68].CGColor
+            ];
+        } else {
+            // Clear Light Crystal Glass
+            iconImgView.alpha = 0.72;
+            glassShell.backgroundColor = [UIColor colorWithWhite:0.96 alpha:0.24];
+            domeLayer.colors = @[
+                (id)[UIColor colorWithWhite:1.0 alpha:0.52].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor
+            ];
+            rimGrad.colors = @[
+                (id)[UIColor colorWithWhite:1.0 alpha:0.98].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.34].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.28].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.82].CGColor
+            ];
+        }
+    } else {
+        // MODE 3: Tinted Liquid Glass (Live Rainbow Hue + Brightness)
+        iconImgView.alpha = (subMode == 1) ? 0.85 : 0.90;
+        CGFloat tintAlpha = (subMode == 1) ? 0.56 : 0.44;
+        UIColor *tintCol = [UIColor colorWithHue:tintHue saturation:0.80 brightness:tintBri alpha:tintAlpha];
+        UIColor *rimBright = [UIColor colorWithHue:tintHue saturation:0.45 brightness:MIN(tintBri + 0.20, 1.0) alpha:0.95];
+        UIColor *rimSoft = [UIColor colorWithHue:tintHue saturation:0.65 brightness:tintBri alpha:0.28];
+
+        glassShell.backgroundColor = tintCol;
+        domeLayer.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:0.36].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.05].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:0.06].CGColor,
+            (id)[UIColor colorWithHue:tintHue saturation:0.50 brightness:1.0 alpha:0.22].CGColor
+        ];
+        rimGrad.colors = @[
+            (id)rimBright.CGColor,
+            (id)rimSoft.CGColor,
+            (id)rimSoft.CGColor,
+            (id)rimBright.CGColor
+        ];
+    }
 }
 
 %group HomeScreenHooks
@@ -157,7 +333,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    // Large Icons mode hides labels automatically; Small mode respects system labels
     BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", YES);
     %orig(largeIcons ? YES : hidden);
 }
@@ -169,7 +344,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     CGFloat scale = largeIcons ? 1.06 : 0.94;
     self.transform = CGAffineTransformMakeScale(scale, scale);
 
-    // Ensure label visibility updates live when toggling Small / Large
     @try {
         UIView *labelView = [self valueForKey:@"_labelView"];
         if ([labelView isKindOfClass:[UIView class]]) {
@@ -178,9 +352,8 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         }
     } @catch (NSException *e) {}
 
-    // Icon Appearance Engine: 0 = Default, 1 = Dark, 2 = Clear, 3 = Tinted
     NSInteger iconStyle = iOS27IntPref(@"kHSIconStyle", 0);
-    NSInteger subMode = iOS27IntPref(@"kHSIconSubMode", 0); // 0=Light/Always, 1=Dark/Auto, 2=Auto
+    NSInteger subMode = iOS27IntPref(@"kHSIconSubMode", 0);
     CGFloat tintHue = iOS27FloatPref(@"kHSTintHue", 0.55);
     CGFloat tintBri = iOS27FloatPref(@"kHSTintBrightness", 0.85);
 
@@ -190,53 +363,7 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     } @catch (NSException *e) {}
 
     if ([iconImgView isKindOfClass:[UIView class]]) {
-        UIView *styleVeil = [iconImgView viewWithTag:27888];
-
-        if (iconStyle == 0) {
-            // Default
-            iconImgView.alpha = 1.0;
-            iconImgView.layer.borderWidth = 0.0;
-            if (styleVeil) styleVeil.hidden = YES;
-        } else {
-            if (!styleVeil) {
-                styleVeil = [[UIView alloc] initWithFrame:iconImgView.bounds];
-                styleVeil.tag = 27888;
-                styleVeil.userInteractionEnabled = NO;
-                styleVeil.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                styleVeil.layer.cornerRadius = 13.0;
-                styleVeil.layer.cornerCurve = kCACornerCurveContinuous;
-                styleVeil.clipsToBounds = YES;
-                [iconImgView addSubview:styleVeil];
-            }
-            styleVeil.frame = iconImgView.bounds;
-            styleVeil.hidden = NO;
-
-            if (iconStyle == 1) {
-                // Dark Mode Icons
-                iconImgView.alpha = 1.0;
-                styleVeil.backgroundColor = [UIColor colorWithWhite:0.0 alpha:(subMode == 0 ? 0.36 : 0.24)];
-                styleVeil.layer.borderWidth = 0.8;
-                styleVeil.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.18].CGColor;
-            } else if (iconStyle == 2) {
-                // Clear Glass Icons (Light / Dark / Auto)
-                iconImgView.alpha = 0.78;
-                if (subMode == 1) {
-                    styleVeil.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.45];
-                    styleVeil.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
-                } else {
-                    styleVeil.backgroundColor = [UIColor colorWithWhite:0.95 alpha:0.34];
-                    styleVeil.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.65].CGColor;
-                }
-                styleVeil.layer.borderWidth = 1.1;
-            } else {
-                // Tinted Icons (Live Rainbow Hue + Brightness)
-                iconImgView.alpha = 0.92;
-                UIColor *tintColor = [UIColor colorWithHue:tintHue saturation:0.82 brightness:tintBri alpha:0.52];
-                styleVeil.backgroundColor = tintColor;
-                styleVeil.layer.borderWidth = 1.0;
-                styleVeil.layer.borderColor = [UIColor colorWithHue:tintHue saturation:0.65 brightness:MIN(tintBri + 0.15, 1.0) alpha:0.75].CGColor;
-            }
-        }
+        ApplyLiquidGlassToIcon(iconImgView, iconStyle, subMode, tintHue, tintBri);
     }
 }
 
@@ -300,7 +427,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     UIButton *searchPill = (UIButton *)[self viewWithTag:27005];
 
     if (isEditing) {
-        // Edit mode me dots show karein (exact iOS 27 behavior)
         if (searchPill) searchPill.hidden = YES;
         for (UIView *sub in self.subviews) {
             if (sub.tag != 27005) {
