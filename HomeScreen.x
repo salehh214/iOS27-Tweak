@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
 #import "iOS27Prefs.h"
 
 static CGFloat gGlassAlpha = 0.25;
@@ -15,6 +16,10 @@ static CGFloat gGlassAlpha = 0.25;
 @end
 
 @interface SBFolderIconImageView : UIView
+@end
+
+@interface SBHomeScreenViewController : UIViewController
+- (void)ios27_syncHomeWallpaper;
 @end
 
 @interface SBIconListPageControl : UIView
@@ -91,6 +96,52 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 }
 
 %group HomeScreenHooks
+
+%hook SBHomeScreenViewController
+
+- (void)viewDidLoad {
+    %orig;
+    [self ios27_syncHomeWallpaper];
+
+    static const void *kHSWpObsKey = &kHSWpObsKey;
+    if (!objc_getAssociatedObject(self, kHSWpObsKey)) {
+        objc_setAssociatedObject(self, kHSWpObsKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ios27_syncHomeWallpaper)
+                                                     name:kIOS27WallpaperChanged
+                                                   object:nil];
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    UIImageView *wpView = (UIImageView *)[self.view viewWithTag:27301];
+    if (wpView) {
+        wpView.frame = self.view.bounds;
+        for (CALayer *sub in wpView.layer.sublayers) {
+            if ([sub.name isEqualToString:@"iOS27PresetGradient"]) {
+                sub.frame = wpView.bounds;
+            }
+        }
+    }
+}
+
+%new
+- (void)ios27_syncHomeWallpaper {
+    UIImageView *wpView = (UIImageView *)[self.view viewWithTag:27301];
+    if (!wpView) {
+        wpView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+        wpView.tag = 27301;
+        wpView.contentMode = UIViewContentModeScaleAspectFill;
+        wpView.clipsToBounds = YES;
+        wpView.userInteractionEnabled = NO;
+        wpView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self.view insertSubview:wpView atIndex:0];
+    }
+    iOS27ApplyWallpaperToView(wpView);
+}
+
+%end
 
 %hook SBIconView
 - (void)setLabelHidden:(BOOL)hidden {
@@ -187,7 +238,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     ApplyFakeGlass(searchPill, pillH / 2.0, gGlassAlpha);
 }
 
-// Directly route touches to searchPill so PageControl does not swallow taps
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *searchPill = [self viewWithTag:27005];
     if (searchPill && !searchPill.hidden && CGRectContainsPoint(CGRectInset(searchPill.frame, -12.0, -10.0), point)) {
@@ -206,7 +256,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 
 %new
 - (void)ios27_openSpotlightSearch:(UIButton *)sender {
-    // Quick visual feedback on tap
     [UIView animateWithDuration:0.08 animations:^{
         sender.transform = CGAffineTransformMakeScale(0.92, 0.92);
     } completion:^(BOOL finished) {
@@ -217,7 +266,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 
     SBIconController *ic = [%c(SBIconController) sharedInstance];
 
-    // 1. iOS 15 Primary: SBSearchPresenter on SBIconController
     if ([ic respondsToSelector:@selector(searchPresenter)]) {
         SBSearchPresenter *sp = [ic searchPresenter];
         if (sp && [sp respondsToSelector:@selector(presentSearchAnimated:)]) {
@@ -226,7 +274,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         }
     }
 
-    // 2. iOS 15 SBHIconManager -> searchPresenter / rootFolderController
     SBHIconManager *manager = [ic respondsToSelector:@selector(iconManager)] ? [ic iconManager] : nil;
     if (manager) {
         if ([manager respondsToSelector:@selector(searchPresenter)]) {
@@ -252,7 +299,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         }
     }
 
-    // 3. Direct KVC fallback on SBIconController (_searchPresenter / _searchGesture)
     @try {
         id sp = [ic valueForKey:@"_searchPresenter"];
         if (sp && [sp respondsToSelector:@selector(presentSearchAnimated:)]) {
@@ -269,7 +315,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         }
     } @catch (NSException *e) {}
 
-    // 4. Final fallback: SBMainWorkspace
     SBMainWorkspace *workspace = [%c(SBMainWorkspace) sharedInstance];
     if ([workspace respondsToSelector:@selector(presentSpotlightFromSource:animated:)]) {
         [workspace presentSpotlightFromSource:1 animated:YES];
@@ -290,6 +335,7 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 %end
 
 %ctor {
+    if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
     if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableHomeScreen", YES)) {
         gGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.25);
         %init(HomeScreenHooks);
