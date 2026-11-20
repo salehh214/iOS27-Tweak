@@ -4,9 +4,13 @@
 #import <objc/runtime.h>
 #import "iOS27Prefs.h"
 
+@interface SBHomeScreenButton : UIButton
+@end
+
 @interface SBRootFolderView : UIView
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated;
 - (BOOL)isEditing;
+- (UIControl *)pageControl;
 - (void)ios27_updateEditOverlay:(BOOL)editing;
 - (void)ios27_brushTapped;
 - (void)ios27_doneTapped;
@@ -20,6 +24,8 @@
 @interface SBRootFolderController : UIViewController
 - (void)presentPageManagementAnimated:(BOOL)animated;
 - (void)setPageManagementMode:(BOOL)mode;
+- (void)folderViewDidTapPageControl:(id)folderView;
+- (void)enterPageManagementMode;
 @end
 
 @interface SBHIconManager : NSObject
@@ -32,7 +38,11 @@
 + (instancetype)sharedInstance;
 - (SBHIconManager *)iconManager;
 - (void)setEditing:(BOOL)editing;
+- (void)presentAddWidgetSheetFromViewController:(UIViewController *)vc;
 @end
+
+static __weak UIControl *gStockAddButton = nil;
+static __weak UIControl *gStockDoneButton = nil;
 
 static void ApplyHSEditorGlass(UIView *view, CGFloat radius, CGFloat alpha) {
     view.backgroundColor = [UIColor colorWithRed:0.12 green:0.14 blue:0.18 alpha:alpha];
@@ -62,6 +72,19 @@ static void ApplyHSEditorGlass(UIView *view, CGFloat radius, CGFloat alpha) {
     }
     sheen.frame = view.bounds;
     sheen.cornerRadius = radius;
+}
+
+static void RefreshAllVisibleIconsInView(UIView *root) {
+    if (!root) return;
+    if ([NSStringFromClass([root class]) isEqualToString:@"SBIconView"] ||
+        [NSStringFromClass([root class]) isEqualToString:@"SBIconListPageControl"]) {
+        [root setNeedsLayout];
+        [root layoutIfNeeded];
+        return;
+    }
+    for (UIView *sub in root.subviews) {
+        RefreshAllVisibleIconsInView(sub);
+    }
 }
 
 static UIImage *iOS27HSLoadThumb(NSString *path, CGFloat maxPixelSize) {
@@ -256,9 +279,8 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 
         CGFloat w = frame.size.width;
         CGFloat h = frame.size.height;
-        CGFloat topY = (h > 600.0) ? 44.0 : 24.0;
+        CGFloat topY = (h > 600.0) ? 44.0 : 22.0;
 
-        // Top Bar: Cancel (Left) & Done (Right)
         UIButton *cancelBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         cancelBtn.frame = CGRectMake(14.0, topY, 74.0, 32.0);
         [cancelBtn setTitle:@"Cancel" forState:UIControlStateNormal];
@@ -277,7 +299,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         [doneBtn addTarget:self action:@selector(doneTapped) forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:doneBtn];
 
-        // Center Scaled Home Screen Preview Card (Proportional for iPhone SE 2016)
         CGFloat bottomBarH = 92.0;
         CGFloat availH = h - (topY + 46.0) - bottomBarH - 12.0;
         CGFloat aspect = w / h;
@@ -299,7 +320,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         self.previewWallpaper.clipsToBounds = YES;
         [cardBox addSubview:self.previewWallpaper];
 
-        // Miniature Home Screen Icons + Search Pill + Dock inside Preview Card
         CGFloat pad = 14.0;
         CGFloat gap = 10.0;
         CGFloat iconS = floor((cardW - pad * 2.0 - gap * 3.0) / 4.0);
@@ -312,7 +332,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
             [UIColor colorWithRed:0.95 green:0.72 blue:0.15 alpha:0.92]
         ];
 
-        // 2x2 Widget placeholder top-left + mini icons
         UIView *miniWidget = [[UIView alloc] initWithFrame:CGRectMake(pad, 20.0, iconS * 2.0 + gap, iconS * 2.0 + gap)];
         miniWidget.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.88];
         miniWidget.layer.cornerRadius = 12.0;
@@ -330,7 +349,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
             }
         }
 
-        // Mini Search Pill
         UIView *miniSearch = [[UIView alloc] initWithFrame:CGRectMake((cardW - 58.0) / 2.0, cardH - iconS - 42.0, 58.0, 16.0)];
         ApplyHSEditorGlass(miniSearch, 8.0, 0.35);
         UILabel *msLbl = [[UILabel alloc] initWithFrame:miniSearch.bounds];
@@ -341,7 +359,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         [miniSearch addSubview:msLbl];
         [cardBox addSubview:miniSearch];
 
-        // Mini Glass Dock
         CGFloat dockH = iconS + 14.0;
         UIView *miniDock = [[UIView alloc] initWithFrame:CGRectMake(8.0, cardH - dockH - 8.0, cardW - 16.0, dockH)];
         ApplyHSEditorGlass(miniDock, 16.0, 0.32);
@@ -355,7 +372,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
             [miniDock addSubview:dic];
         }
 
-        // Bottom Toolbar: Pair | Color | Gradient | Photo  |  Blur (Compact for 320px SE 2016)
         CGFloat btnSize = (w <= 330.0) ? 44.0 : 50.0;
         CGFloat spacing = (w <= 330.0) ? 11.0 : 16.0;
         CGFloat divW = 1.0;
@@ -368,7 +384,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         self.gradCircle = [self makeToolButtonAtX:startX + (btnSize + spacing) * 2 y:btnY size:btnSize title:@"Gradient" symbol:nil action:@selector(gradTapped)];
         self.photoCircle = [self makeToolButtonAtX:startX + (btnSize + spacing) * 3 y:btnY size:btnSize title:@"Photo" symbol:@"photo.on.rectangle" action:@selector(photoTapped)];
 
-        // Vertical Divider before Blur
         CGFloat divX = startX + (btnSize + spacing) * 4 - (spacing / 2.0) + 4.0;
         UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(divX, btnY + 6.0, divW, btnSize - 12.0)];
         divider.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.25];
@@ -410,9 +425,9 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 }
 
 - (void)refreshPreviewAndSelections {
-    iOS27ApplyHomeWallpaperToView(self.previewWallpaper, self.draftMode, self.draftColorIdx, self.draftGradIdx, self.draftBlur, YES);
+    BOOL dimOn = iOS27BoolPref(@"kHSDimWallpaper", NO);
+    iOS27ApplyHomeWallpaperToView(self.previewWallpaper, self.draftMode, self.draftColorIdx, self.draftGradIdx, self.draftBlur, dimOn, YES);
 
-    // Style swatches
     self.colorCircle.backgroundColor = iOS27HSSolidColorForIndex(self.draftColorIdx);
 
     for (CALayer *l in [self.gradCircle.layer.sublayers copy]) {
@@ -424,7 +439,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
     gSwatch.colors = iOS27GradientColorsForTheme(self.draftGradIdx);
     [self.gradCircle.layer insertSublayer:gSwatch atIndex:0];
 
-    // Selection rings
     NSArray<UIButton *> *modeBtns = @[self.pairCircle, self.colorCircle, self.gradCircle, self.photoCircle];
     for (NSInteger i = 0; i < (NSInteger)modeBtns.count; i++) {
         UIButton *b = modeBtns[i];
@@ -433,39 +447,25 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         b.layer.borderColor = selected ? [UIColor whiteColor].CGColor : [UIColor colorWithWhite:1.0 alpha:0.28].CGColor;
     }
 
-    // Blur toggle highlight
     self.blurCircle.backgroundColor = self.draftBlur ? [UIColor whiteColor] : [UIColor colorWithWhite:0.20 alpha:1.0];
     self.blurCircle.tintColor = self.draftBlur ? [UIColor blackColor] : [UIColor whiteColor];
     self.blurCircle.layer.borderWidth = self.draftBlur ? 2.0 : 1.0;
     self.blurCircle.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.4].CGColor;
 }
 
-- (void)pairTapped {
-    self.draftMode = 0;
-    [self refreshPreviewAndSelections];
-}
-
+- (void)pairTapped { self.draftMode = 0; [self refreshPreviewAndSelections]; }
 - (void)colorTapped {
-    if (self.draftMode == 1) {
-        self.draftColorIdx = (self.draftColorIdx + 1) % kIOS27HSColorCount;
-    } else {
-        self.draftMode = 1;
-    }
+    if (self.draftMode == 1) self.draftColorIdx = (self.draftColorIdx + 1) % kIOS27HSColorCount;
+    else self.draftMode = 1;
     [self refreshPreviewAndSelections];
 }
-
 - (void)gradTapped {
-    if (self.draftMode == 2) {
-        self.draftGradIdx = (self.draftGradIdx + 1) % kIOS27ThemeCount;
-    } else {
-        self.draftMode = 2;
-    }
+    if (self.draftMode == 2) self.draftGradIdx = (self.draftGradIdx + 1) % kIOS27ThemeCount;
+    else self.draftMode = 2;
     [self refreshPreviewAndSelections];
 }
-
 - (void)photoTapped {
     if (self.photoSheet) [self.photoSheet removeFromSuperview];
-
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
     CGFloat sheetH = h * 0.64;
@@ -506,16 +506,8 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         sheet.frame = CGRectMake(10.0, h - sheetH - 12.0, w - 20.0, sheetH);
     } completion:nil];
 }
-
-- (void)blurTapped {
-    self.draftBlur = !self.draftBlur;
-    [self refreshPreviewAndSelections];
-}
-
-- (void)cancelTapped {
-    if (self.onClose) self.onClose();
-}
-
+- (void)blurTapped { self.draftBlur = !self.draftBlur; [self refreshPreviewAndSelections]; }
+- (void)cancelTapped { if (self.onClose) self.onClose(); }
 - (void)doneTapped {
     iOS27SetIntPref(@"kHSWallpaperMode", self.draftMode);
     iOS27SetIntPref(@"kHSColorIndex", self.draftColorIdx);
@@ -528,10 +520,21 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 @end
 
 // =========================================================================
-// 3. Compact Home Screen Icon Customize Sheet (Small/Large + Default/Dark/Tinted)
+// 3. Exact iOS 27 Video-Style Customize Sheet (Default / Dark / Clear / Tinted + Rainbow Slider)
 // =========================================================================
 @interface IOS27HomeCustomizeSheet : UIView
+@property (nonatomic, strong) UIButton *dimBtn;
+@property (nonatomic, strong) UIButton *sizeBtn;
+@property (nonatomic, strong) NSArray<UIButton *> *styleCards;
+@property (nonatomic, strong) UIView *slidersContainer;
+@property (nonatomic, strong) UISlider *hueSlider;
+@property (nonatomic, strong) UISlider *briSlider;
+@property (nonatomic, strong) CAGradientLayer *briTrackGrad;
+@property (nonatomic, strong) UISegmentedControl *subModeSeg;
+@property (nonatomic, copy) void (^onLiveRefresh)(void);
+@property (nonatomic, copy) void (^onHeightChanged)(CGFloat newHeight);
 @property (nonatomic, copy) void (^onClose)(void);
+- (CGFloat)desiredHeight;
 @end
 
 @implementation IOS27HomeCustomizeSheet
@@ -539,75 +542,292 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        ApplyHSEditorGlass(self, 24.0, 0.90);
+        ApplyHSEditorGlass(self, 28.0, 0.84);
 
         CGFloat w = frame.size.width;
 
-        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, w - 80, 24)];
-        title.text = @"Customize Icons";
-        title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
+        // Top Header: Sun (Dim Wallpaper) | Customize | Small/Large Toggle
+        self.dimBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.dimBtn.frame = CGRectMake(12.0, 10.0, 32.0, 32.0);
+        [self.dimBtn addTarget:self action:@selector(toggleDim) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:self.dimBtn];
+
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(50.0, 12.0, w - 100.0, 28.0)];
+        title.text = @"Customize";
+        title.textAlignment = NSTextAlignmentCenter;
+        title.font = [UIFont systemFontOfSize:15.5 weight:UIFontWeightSemibold];
         title.textColor = [UIColor whiteColor];
         [self addSubview:title];
 
-        UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        doneBtn.frame = CGRectMake(w - 68, 10, 56, 26);
-        [doneBtn setTitle:@"Done" forState:UIControlStateNormal];
-        doneBtn.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightBold];
-        [doneBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        ApplyHSEditorGlass(doneBtn, 13.0, 0.55);
-        [doneBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self addSubview:doneBtn];
+        self.sizeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.sizeBtn.frame = CGRectMake(w - 44.0, 10.0, 32.0, 32.0);
+        [self.sizeBtn addTarget:self action:@selector(toggleSize) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:self.sizeBtn];
 
-        // Row 1: Size (Small / Large)
-        UISegmentedControl *sizeSeg = [[UISegmentedControl alloc] initWithItems:@[@"Small", @"Large"]];
-        sizeSeg.frame = CGRectMake(14, 48, w - 28, 32);
-        sizeSeg.selectedSegmentIndex = iOS27BoolPref(@"kHSLargeIcons", NO) ? 1 : 0;
-        [sizeSeg addTarget:self action:@selector(sizeChanged:) forControlEvents:UIControlEventValueChanged];
-        [self addSubview:sizeSeg];
+        // 4 Style Cards: Default, Dark, Clear, Tinted (Sized for 320px SE 2016)
+        CGFloat pad = 10.0;
+        CGFloat gap = 6.0;
+        CGFloat cardW = floor((w - pad * 2.0 - gap * 3.0) / 4.0);
+        CGFloat cardH = 84.0;
+        NSArray *titles = @[@"Default", @"Dark", @"Clear", @"Tinted"];
+        NSMutableArray *cards = [NSMutableArray array];
 
-        // Row 2: Style (Default / Dark / Tinted)
-        UISegmentedControl *styleSeg = [[UISegmentedControl alloc] initWithItems:@[@"Default", @"Dark", @"Tinted"]];
-        styleSeg.frame = CGRectMake(14, 92, w - 28, 32);
-        styleSeg.selectedSegmentIndex = iOS27IntPref(@"kHSIconStyle", 0);
-        [styleSeg addTarget:self action:@selector(styleChanged:) forControlEvents:UIControlEventValueChanged];
-        [self addSubview:styleSeg];
+        for (NSInteger i = 0; i < 4; i++) {
+            UIButton *card = [UIButton buttonWithType:UIButtonTypeCustom];
+            card.tag = i;
+            card.frame = CGRectMake(pad + i * (cardW + gap), 50.0, cardW, cardH);
+            card.layer.cornerRadius = 16.0;
+            card.layer.cornerCurve = kCACornerCurveContinuous;
+            card.clipsToBounds = YES;
+            card.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+            [card addTarget:self action:@selector(styleCardTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+            // Mini preview icon inside card (matches Video 2 weather-cloud look)
+            CGFloat iconS = MIN(cardW - 22.0, 42.0);
+            UIView *miniIcon = [[UIView alloc] initWithFrame:CGRectMake((cardW - iconS) / 2.0, 10.0, iconS, iconS)];
+            miniIcon.layer.cornerRadius = 10.0;
+            miniIcon.layer.cornerCurve = kCACornerCurveContinuous;
+            miniIcon.userInteractionEnabled = NO;
+            miniIcon.clipsToBounds = YES;
+
+            UIImageView *sym = [[UIImageView alloc] initWithFrame:CGRectInset(miniIcon.bounds, 6.0, 6.0)];
+            sym.contentMode = UIViewContentModeScaleAspectFit;
+            if (@available(iOS 13.0, *)) {
+                sym.image = [UIImage systemImageNamed:@"cloud.sun.fill"];
+            }
+
+            if (i == 0) {
+                miniIcon.backgroundColor = [UIColor colorWithRed:0.15 green:0.58 blue:0.98 alpha:1.0];
+                sym.tintColor = [UIColor whiteColor];
+            } else if (i == 1) {
+                miniIcon.backgroundColor = [UIColor colorWithWhite:0.10 alpha:1.0];
+                sym.tintColor = [UIColor colorWithRed:1.0 green:0.84 blue:0.25 alpha:1.0];
+            } else if (i == 2) {
+                miniIcon.backgroundColor = [UIColor colorWithWhite:0.82 alpha:0.42];
+                miniIcon.layer.borderWidth = 1.0;
+                miniIcon.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.65].CGColor;
+                sym.tintColor = [UIColor colorWithWhite:1.0 alpha:0.92];
+            } else {
+                miniIcon.backgroundColor = [UIColor colorWithWhite:0.14 alpha:0.92];
+                sym.tintColor = [UIColor colorWithRed:0.92 green:0.88 blue:0.78 alpha:0.95];
+            }
+            [miniIcon addSubview:sym];
+            [card addSubview:miniIcon];
+
+            UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2, cardH - 22.0, cardW - 4, 16.0)];
+            lbl.text = titles[i];
+            lbl.textAlignment = NSTextAlignmentCenter;
+            lbl.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
+            lbl.textColor = [UIColor whiteColor];
+            lbl.userInteractionEnabled = NO;
+            [card addSubview:lbl];
+
+            [self addSubview:card];
+            [cards addObject:card];
+        }
+        self.styleCards = cards;
+
+        // Tinted Sliders Container (Rainbow Hue + Brightness)
+        self.slidersContainer = [[UIView alloc] initWithFrame:CGRectMake(14.0, 144.0, w - 28.0, 74.0)];
+        self.slidersContainer.backgroundColor = [UIColor clearColor];
+
+        // Rainbow Hue Track
+        UIView *hueTrack = [[UIView alloc] initWithFrame:CGRectMake(0, 6.0, w - 28.0, 18.0)];
+        hueTrack.layer.cornerRadius = 9.0;
+        hueTrack.clipsToBounds = YES;
+        CAGradientLayer *rainbow = [CAGradientLayer layer];
+        rainbow.frame = hueTrack.bounds;
+        rainbow.startPoint = CGPointMake(0.0, 0.5);
+        rainbow.endPoint = CGPointMake(1.0, 0.5);
+        rainbow.colors = @[
+            (id)[UIColor redColor].CGColor,
+            (id)[UIColor orangeColor].CGColor,
+            (id)[UIColor yellowColor].CGColor,
+            (id)[UIColor greenColor].CGColor,
+            (id)[UIColor cyanColor].CGColor,
+            (id)[UIColor blueColor].CGColor,
+            (id)[UIColor magentaColor].CGColor,
+            (id)[UIColor redColor].CGColor
+        ];
+        [hueTrack.layer addSublayer:rainbow];
+        [self.slidersContainer addSubview:hueTrack];
+
+        self.hueSlider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, w - 28.0, 30.0)];
+        self.hueSlider.minimumValue = 0.0;
+        self.hueSlider.maximumValue = 1.0;
+        self.hueSlider.value = iOS27FloatPref(@"kHSTintHue", 0.55);
+        self.hueSlider.minimumTrackTintColor = [UIColor clearColor];
+        self.hueSlider.maximumTrackTintColor = [UIColor clearColor];
+        [self.hueSlider addTarget:self action:@selector(sliderChanged) forControlEvents:UIControlEventValueChanged];
+        [self.slidersContainer addSubview:self.hueSlider];
+
+        // Brightness Track
+        UIView *briTrack = [[UIView alloc] initWithFrame:CGRectMake(0, 44.0, w - 28.0, 18.0)];
+        briTrack.layer.cornerRadius = 9.0;
+        briTrack.clipsToBounds = YES;
+        self.briTrackGrad = [CAGradientLayer layer];
+        self.briTrackGrad.frame = briTrack.bounds;
+        self.briTrackGrad.startPoint = CGPointMake(0.0, 0.5);
+        self.briTrackGrad.endPoint = CGPointMake(1.0, 0.5);
+        [briTrack.layer addSublayer:self.briTrackGrad];
+        [self.slidersContainer addSubview:briTrack];
+
+        self.briSlider = [[UISlider alloc] initWithFrame:CGRectMake(0, 38.0, w - 28.0, 30.0)];
+        self.briSlider.minimumValue = 0.25;
+        self.briSlider.maximumValue = 1.0;
+        self.briSlider.value = iOS27FloatPref(@"kHSTintBrightness", 0.85);
+        self.briSlider.minimumTrackTintColor = [UIColor clearColor];
+        self.briSlider.maximumTrackTintColor = [UIColor clearColor];
+        [self.briSlider addTarget:self action:@selector(sliderChanged) forControlEvents:UIControlEventValueChanged];
+        [self.slidersContainer addSubview:self.briSlider];
+
+        [self addSubview:self.slidersContainer];
+
+        // Bottom SubMode Segmented Control (Always/Auto or Light/Dark/Auto)
+        self.subModeSeg = [[UISegmentedControl alloc] initWithItems:@[@"Light", @"Dark", @"Auto"]];
+        self.subModeSeg.frame = CGRectMake(24.0, 148.0, w - 48.0, 32.0);
+        [self.subModeSeg addTarget:self action:@selector(subModeChanged) forControlEvents:UIControlEventValueChanged];
+        [self addSubview:self.subModeSeg];
+
+        [self syncUIState:NO];
     }
     return self;
 }
 
-- (void)sizeChanged:(UISegmentedControl *)seg {
-    iOS27SetBoolPref(@"kHSLargeIcons", seg.selectedSegmentIndex == 1);
-    [[NSNotificationCenter defaultCenter] postNotificationName:kIOS27HSStyleChanged object:nil];
+- (CGFloat)desiredHeight {
+    NSInteger style = iOS27IntPref(@"kHSIconStyle", 0);
+    if (style == 0) return 150.0;
+    if (style == 1 || style == 2) return 194.0;
+    return 264.0; // Tinted with both sliders + Light/Dark/Auto
 }
 
-- (void)styleChanged:(UISegmentedControl *)seg {
-    iOS27SetIntPref(@"kHSIconStyle", seg.selectedSegmentIndex);
-    [[NSNotificationCenter defaultCenter] postNotificationName:kIOS27HSStyleChanged object:nil];
+- (void)syncUIState:(BOOL)animateResize {
+    BOOL dimOn = iOS27BoolPref(@"kHSDimWallpaper", NO);
+    BOOL largeOn = iOS27BoolPref(@"kHSLargeIcons", YES);
+    NSInteger style = iOS27IntPref(@"kHSIconStyle", 0);
+    NSInteger subMode = iOS27IntPref(@"kHSIconSubMode", 0);
+
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
+        [self.dimBtn setImage:[UIImage systemImageNamed:(dimOn ? @"sun.min.fill" : @"sun.max") withConfiguration:cfg] forState:UIControlStateNormal];
+        self.dimBtn.tintColor = dimOn ? [UIColor systemYellowColor] : [UIColor whiteColor];
+
+        [self.sizeBtn setImage:[UIImage systemImageNamed:(largeOn ? @"square.fill" : @"square.grid.2x2") withConfiguration:cfg] forState:UIControlStateNormal];
+        self.sizeBtn.tintColor = [UIColor whiteColor];
+    }
+
+    for (NSInteger i = 0; i < (NSInteger)self.styleCards.count; i++) {
+        UIButton *c = self.styleCards[i];
+        BOOL sel = (i == style);
+        c.layer.borderWidth = sel ? 1.8 : 0.6;
+        c.layer.borderColor = sel ? [UIColor whiteColor].CGColor : [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
+        c.backgroundColor = sel ? [UIColor colorWithWhite:1.0 alpha:0.20] : [UIColor colorWithWhite:1.0 alpha:0.06];
+    }
+
+    // Update brightness slider gradient color
+    UIColor *hueCol = [UIColor colorWithHue:self.hueSlider.value saturation:0.85 brightness:1.0 alpha:1.0];
+    self.briTrackGrad.colors = @[(id)[UIColor whiteColor].CGColor, (id)hueCol.CGColor];
+
+    // Configure dynamic controls
+    self.slidersContainer.hidden = (style != 3);
+    self.subModeSeg.hidden = (style == 0);
+
+    if (style == 1) {
+        if (self.subModeSeg.numberOfSegments != 2) {
+            [self.subModeSeg removeAllSegments];
+            [self.subModeSeg insertSegmentWithTitle:@"Always" atIndex:0 animated:NO];
+            [self.subModeSeg insertSegmentWithTitle:@"Auto" atIndex:1 animated:NO];
+        }
+        self.subModeSeg.selectedSegmentIndex = MIN(subMode, 1);
+        self.subModeSeg.frame = CGRectMake(28.0, 148.0, self.bounds.size.width - 56.0, 32.0);
+    } else if (style == 2 || style == 3) {
+        if (self.subModeSeg.numberOfSegments != 3) {
+            [self.subModeSeg removeAllSegments];
+            [self.subModeSeg insertSegmentWithTitle:@"Light" atIndex:0 animated:NO];
+            [self.subModeSeg insertSegmentWithTitle:@"Dark" atIndex:1 animated:NO];
+            [self.subModeSeg insertSegmentWithTitle:@"Auto" atIndex:2 animated:NO];
+        }
+        self.subModeSeg.selectedSegmentIndex = MIN(subMode, 2);
+        CGFloat segY = (style == 3) ? 222.0 : 148.0;
+        self.subModeSeg.frame = CGRectMake(24.0, segY, self.bounds.size.width - 48.0, 32.0);
+    }
+
+    if (animateResize && self.onHeightChanged) {
+        self.onHeightChanged([self desiredHeight]);
+    }
 }
 
-- (void)closeTapped {
-    if (self.onClose) self.onClose();
+- (void)toggleDim {
+    BOOL cur = iOS27BoolPref(@"kHSDimWallpaper", NO);
+    iOS27SetBoolPref(@"kHSDimWallpaper", !cur);
+    [self syncUIState:NO];
+    if (self.onLiveRefresh) self.onLiveRefresh();
+}
+
+- (void)toggleSize {
+    BOOL cur = iOS27BoolPref(@"kHSLargeIcons", YES);
+    iOS27SetBoolPref(@"kHSLargeIcons", !cur);
+    [self syncUIState:NO];
+    if (self.onLiveRefresh) self.onLiveRefresh();
+}
+
+- (void)styleCardTapped:(UIButton *)sender {
+    iOS27SetIntPref(@"kHSIconStyle", sender.tag);
+    [self syncUIState:YES];
+    if (self.onLiveRefresh) self.onLiveRefresh();
+}
+
+- (void)sliderChanged {
+    iOS27SetFloatPref(@"kHSTintHue", self.hueSlider.value);
+    iOS27SetFloatPref(@"kHSTintBrightness", self.briSlider.value);
+    [self syncUIState:NO];
+    if (self.onLiveRefresh) self.onLiveRefresh();
+}
+
+- (void)subModeChanged {
+    iOS27SetIntPref(@"kHSIconSubMode", self.subModeSeg.selectedSegmentIndex);
+    if (self.onLiveRefresh) self.onLiveRefresh();
 }
 
 @end
 
 // =========================================================================
-// 4. SpringBoard Home Screen Edit Mode Hooks (Brush + Checkmark + Glass Menu)
+// 4. SpringBoard Home Screen Edit Mode Hooks (Exact Position Brush + Checkmark)
 // =========================================================================
 static const void *kTopBarKey = &kTopBarKey;
 static const void *kMenuOverlayKey = &kMenuOverlayKey;
 static const void *kStudioViewKey = &kStudioViewKey;
-static const void *kCustomizeSheetKey = &kCustomizeSheetKey;
-static const void *kStockAddBtnKey = &kStockAddBtnKey;
-static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
+static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
 
 %group HomeScreenEditorHooks
+
+// Directly intercept stock iOS 15 '+' and 'Done' buttons so they NEVER appear behind Brush/Checkmark
+%hook SBHomeScreenButton
+
+- (void)layoutSubviews {
+    %orig;
+    if (!self.window) return;
+    CGRect winRect = [self convertRect:self.bounds toView:self.window];
+    if (winRect.origin.y >= 0 && winRect.origin.y < 90.0) {
+        if (winRect.origin.x < self.window.bounds.size.width / 2.0) {
+            gStockAddButton = self;
+        } else {
+            gStockDoneButton = self;
+        }
+        self.alpha = 0.0;
+        self.userInteractionEnabled = NO;
+    }
+}
+
+%end
 
 %hook SBRootFolderView
 
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated {
     %orig;
     [self ios27_updateEditOverlay:editing];
+    // Refresh PageControl so Search pill switches to dots while editing
+    RefreshAllVisibleIconsInView(self);
 }
 
 - (void)layoutSubviews {
@@ -621,22 +841,6 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
 - (void)ios27_updateEditOverlay:(BOOL)editing {
     UIWindow *win = self.window;
     if (!win) return;
-
-    // Locate and hide stock iOS 15 '+' and 'Done' buttons while keeping references so Add Widget & Done work natively
-    for (UIView *sub in self.subviews) {
-        NSString *cls = NSStringFromClass([sub class]);
-        if ([cls containsString:@"HomeScreenButton"] || [cls containsString:@"AddWidget"] || [cls containsString:@"DoneButton"]) {
-            if (sub.frame.origin.y < 100.0) {
-                if (sub.frame.origin.x < self.bounds.size.width / 2.0) {
-                    objc_setAssociatedObject(self, kStockAddBtnKey, sub, OBJC_ASSOCIATION_ASSIGN);
-                } else {
-                    objc_setAssociatedObject(self, kStockDoneBtnKey, sub, OBJC_ASSOCIATION_ASSIGN);
-                }
-                sub.alpha = editing ? 0.0 : 1.0;
-                sub.hidden = editing;
-            }
-        }
-    }
 
     UIView *topBar = objc_getAssociatedObject(self, kTopBarKey);
     if (!editing) {
@@ -653,44 +857,52 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
     }
 
     CGFloat w = win.bounds.size.width;
-    CGFloat topY = (win.bounds.size.height > 600.0) ? 44.0 : 22.0;
+    // Match exact stock '+' button Y position (top of screen on iPhone SE 2016)
+    CGFloat topY = (win.bounds.size.height > 600.0) ? 44.0 : 4.0;
+    if (gStockAddButton && gStockAddButton.window == win) {
+        CGRect r = [gStockAddButton convertRect:gStockAddButton.bounds toView:win];
+        if (r.origin.y >= 0 && r.origin.y < 80.0) {
+            topY = r.origin.y;
+        }
+    }
 
     if (!topBar) {
-        topBar = [[UIView alloc] initWithFrame:CGRectMake(0, topY, w, 38.0)];
+        topBar = [[UIView alloc] initWithFrame:CGRectMake(0, topY, w, 32.0)];
         topBar.backgroundColor = [UIColor clearColor];
         topBar.alpha = 0.0;
 
-        // Top-Left Glass Brush Pill (Exact match to screenshot)
+        // Top-Left Glass Brush Pill (Replaces stock '+' at exact position)
         UIButton *brushBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        brushBtn.frame = CGRectMake(14.0, 2.0, 56.0, 32.0);
+        brushBtn.frame = CGRectMake(12.0, 0.0, 52.0, 28.0);
         if (@available(iOS 13.0, *)) {
-            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightSemibold];
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14.0 weight:UIImageSymbolWeightSemibold];
             [brushBtn setImage:[UIImage systemImageNamed:@"paintbrush.fill" withConfiguration:cfg] forState:UIControlStateNormal];
             brushBtn.tintColor = [UIColor whiteColor];
         }
-        ApplyHSEditorGlass(brushBtn, 16.0, 0.55);
+        ApplyHSEditorGlass(brushBtn, 14.0, 0.62);
         [brushBtn addTarget:self action:@selector(ios27_brushTapped) forControlEvents:UIControlEventTouchUpInside];
         [topBar addSubview:brushBtn];
 
-        // Top-Right Glass Checkmark Pill (Exact match to screenshot)
+        // Top-Right Glass Checkmark Pill (Replaces stock 'Done' at exact position)
         UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        doneBtn.frame = CGRectMake(w - 70.0, 2.0, 56.0, 32.0);
+        doneBtn.frame = CGRectMake(w - 64.0, 0.0, 52.0, 28.0);
         if (@available(iOS 13.0, *)) {
-            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:15.5 weight:UIImageSymbolWeightBold];
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14.5 weight:UIImageSymbolWeightBold];
             [doneBtn setImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:cfg] forState:UIControlStateNormal];
             doneBtn.tintColor = [UIColor whiteColor];
         }
-        ApplyHSEditorGlass(doneBtn, 16.0, 0.55);
+        ApplyHSEditorGlass(doneBtn, 14.0, 0.62);
         [doneBtn addTarget:self action:@selector(ios27_doneTapped) forControlEvents:UIControlEventTouchUpInside];
         [topBar addSubview:doneBtn];
 
         [win addSubview:topBar];
         objc_setAssociatedObject(self, kTopBarKey, topBar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-        [UIView animateWithDuration:0.20 animations:^{
+        [UIView animateWithDuration:0.18 animations:^{
             topBar.alpha = 1.0;
         }];
     } else {
+        topBar.frame = CGRectMake(0, topY, w, 32.0);
         [win bringSubviewToFront:topBar];
     }
 }
@@ -716,16 +928,16 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
     [win addSubview:backdrop];
     objc_setAssociatedObject(self, kMenuOverlayKey, backdrop, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // Compact Glass Dropdown Menu Box (Proportioned for iPhone SE 2016 320px width)
+    UIView *topBar = objc_getAssociatedObject(self, kTopBarKey);
+    CGFloat menuY = topBar ? (CGRectGetMaxY(topBar.frame) + 6.0) : 42.0;
     CGFloat w = win.bounds.size.width;
-    CGFloat topY = (win.bounds.size.height > 600.0) ? 84.0 : 60.0;
-    CGFloat menuW = MIN(w - 92.0, 224.0);
-    CGFloat rowH = 44.0;
-    CGFloat menuH = rowH * 4.0 + 12.0;
+    CGFloat menuW = MIN(w - 96.0, 214.0);
+    CGFloat rowH = 42.0;
+    CGFloat menuH = rowH * 4.0 + 10.0;
 
-    UIView *menuBox = [[UIView alloc] initWithFrame:CGRectMake(14.0, topY, menuW, menuH)];
-    ApplyHSEditorGlass(menuBox, 22.0, 0.78);
-    menuBox.transform = CGAffineTransformMakeScale(0.85, 0.85);
+    UIView *menuBox = [[UIView alloc] initWithFrame:CGRectMake(12.0, menuY, menuW, menuH)];
+    ApplyHSEditorGlass(menuBox, 20.0, 0.82);
+    menuBox.transform = CGAffineTransformMakeScale(0.86, 0.86);
     menuBox.alpha = 0.0;
     [backdrop addSubview:menuBox];
 
@@ -739,17 +951,17 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
     for (NSInteger i = 0; i < (NSInteger)items.count; i++) {
         NSDictionary *item = items[i];
         UIButton *rowBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        rowBtn.frame = CGRectMake(6.0, 6.0 + i * rowH, menuW - 12.0, rowH);
+        rowBtn.frame = CGRectMake(6.0, 5.0 + i * rowH, menuW - 12.0, rowH);
         rowBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        rowBtn.contentEdgeInsets = UIEdgeInsetsMake(0, 12.0, 0, 12.0);
+        rowBtn.contentEdgeInsets = UIEdgeInsetsMake(0, 10.0, 0, 10.0);
         rowBtn.titleEdgeInsets = UIEdgeInsetsMake(0, 10.0, 0, 0);
 
         [rowBtn setTitle:item[@"title"] forState:UIControlStateNormal];
-        rowBtn.titleLabel.font = [UIFont systemFontOfSize:15.5 weight:UIFontWeightMedium];
+        rowBtn.titleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightMedium];
         [rowBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
 
         if (@available(iOS 13.0, *)) {
-            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16.0 weight:UIImageSymbolWeightMedium];
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:15.5 weight:UIImageSymbolWeightMedium];
             [rowBtn setImage:[UIImage systemImageNamed:item[@"icon"] withConfiguration:cfg] forState:UIControlStateNormal];
             rowBtn.tintColor = [UIColor whiteColor];
         }
@@ -758,9 +970,9 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
         [menuBox addSubview:rowBtn];
     }
 
-    [UIView animateWithDuration:0.22
+    [UIView animateWithDuration:0.20
                           delay:0
-         usingSpringWithDamping:0.82
+         usingSpringWithDamping:0.84
           initialSpringVelocity:0.6
                         options:UIViewAnimationOptionCurveEaseOut
                      animations:^{
@@ -773,7 +985,7 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
 - (void)ios27_dismissMenu {
     UIView *backdrop = objc_getAssociatedObject(self, kMenuOverlayKey);
     if (!backdrop) return;
-    [UIView animateWithDuration:0.15 animations:^{
+    [UIView animateWithDuration:0.14 animations:^{
         backdrop.alpha = 0.0;
     } completion:^(BOOL finished) {
         [backdrop removeFromSuperview];
@@ -784,12 +996,9 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
 %new
 - (void)ios27_doneTapped {
     [self ios27_dismissMenu];
-
-    UIControl *stockDone = objc_getAssociatedObject(self, kStockDoneBtnKey);
-    if ([stockDone isKindOfClass:[UIControl class]]) {
-        [stockDone sendActionsForControlEvents:UIControlEventTouchUpInside];
+    if (gStockDoneButton) {
+        [gStockDoneButton sendActionsForControlEvents:UIControlEventTouchUpInside];
     }
-
     SBIconController *ic = [%c(SBIconController) sharedInstance];
     if ([ic respondsToSelector:@selector(iconManager)]) {
         SBHIconManager *mgr = [ic iconManager];
@@ -805,9 +1014,13 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
 %new
 - (void)ios27_menuAddWidget {
     [self ios27_dismissMenu];
-    UIControl *stockAdd = objc_getAssociatedObject(self, kStockAddBtnKey);
-    if ([stockAdd isKindOfClass:[UIControl class]]) {
-        [stockAdd sendActionsForControlEvents:UIControlEventTouchUpInside];
+    if (gStockAddButton) {
+        [gStockAddButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        return;
+    }
+    SBIconController *ic = [%c(SBIconController) sharedInstance];
+    if ([ic respondsToSelector:@selector(presentAddWidgetSheetFromViewController:)]) {
+        [ic presentAddWidgetSheetFromViewController:ic];
     }
 }
 
@@ -817,31 +1030,58 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
     UIWindow *win = self.window;
     if (!win) return;
 
-    UIView *oldSheet = objc_getAssociatedObject(self, kCustomizeSheetKey);
-    if (oldSheet) [oldSheet removeFromSuperview];
+    UIView *oldOverlay = objc_getAssociatedObject(self, kCustomizeOverlayKey);
+    if (oldOverlay) [oldOverlay removeFromSuperview];
 
     CGFloat w = win.bounds.size.width;
     CGFloat h = win.bounds.size.height;
-    CGFloat sheetH = 142.0;
 
-    IOS27HomeCustomizeSheet *sheet = [[IOS27HomeCustomizeSheet alloc] initWithFrame:CGRectMake(12.0, h, w - 24.0, sheetH)];
+    UIView *overlay = [[UIView alloc] initWithFrame:win.bounds];
+    overlay.backgroundColor = [UIColor clearColor];
+
+    // Transparent tap area above sheet to dismiss cleanly
+    UIButton *dismissArea = [UIButton buttonWithType:UIButtonTypeCustom];
+    dismissArea.frame = win.bounds;
+    [overlay addSubview:dismissArea];
+
+    IOS27HomeCustomizeSheet *sheet = [[IOS27HomeCustomizeSheet alloc] initWithFrame:CGRectMake(8.0, h, w - 16.0, 150.0)];
+    CGFloat targetH = [sheet desiredHeight];
+    [overlay addSubview:sheet];
+
     __weak typeof(self) weakSelf = self;
+    __weak typeof(overlay) weakOverlay = overlay;
     __weak typeof(sheet) weakSheet = sheet;
 
-    sheet.onClose = ^{
+    void (^closeBlock)(void) = ^{
         [UIView animateWithDuration:0.22 animations:^{
-            weakSheet.frame = CGRectMake(12.0, h, w - 24.0, sheetH);
+            weakSheet.frame = CGRectMake(8.0, h, w - 16.0, weakSheet.frame.size.height);
         } completion:^(BOOL finished) {
-            [weakSheet removeFromSuperview];
-            objc_setAssociatedObject(weakSelf, kCustomizeSheetKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [weakOverlay removeFromSuperview];
+            objc_setAssociatedObject(weakSelf, kCustomizeOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }];
     };
 
-    [win addSubview:sheet];
-    objc_setAssociatedObject(self, kCustomizeSheetKey, sheet, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    sheet.onClose = closeBlock;
+    sheet.onHeightChanged = ^(CGFloat newH) {
+        [UIView animateWithDuration:0.24 delay:0 usingSpringWithDamping:0.86 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            weakSheet.frame = CGRectMake(8.0, h - newH - 10.0, w - 16.0, newH);
+            ApplyHSEditorGlass(weakSheet, 28.0, 0.84);
+        } completion:nil];
+    };
+    sheet.onLiveRefresh = ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:kIOS27HSStyleChanged object:nil];
+        RefreshAllVisibleIconsInView(weakSelf);
+    };
 
-    [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-        sheet.frame = CGRectMake(12.0, h - sheetH - 16.0, w - 24.0, sheetH);
+    [dismissArea addTarget:sheet action:@selector(ios27_dismissSelf) forControlEvents:UIControlEventTouchUpInside];
+    objc_setAssociatedObject(sheet, "closeBlock", closeBlock, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    [win addSubview:overlay];
+    objc_setAssociatedObject(self, kCustomizeOverlayKey, overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    [UIView animateWithDuration:0.26 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.5 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        sheet.frame = CGRectMake(8.0, h - targetH - 10.0, w - 16.0, targetH);
+        ApplyHSEditorGlass(sheet, 28.0, 0.84);
     } completion:nil];
 }
 
@@ -879,20 +1119,51 @@ static const void *kStockDoneBtnKey = &kStockDoneBtnKey;
 %new
 - (void)ios27_menuEditPages {
     [self ios27_dismissMenu];
+
     SBIconController *ic = [%c(SBIconController) sharedInstance];
     SBHIconManager *mgr = [ic respondsToSelector:@selector(iconManager)] ? [ic iconManager] : nil;
     SBRootFolderController *rfc = [mgr respondsToSelector:@selector(rootFolderController)] ? [mgr rootFolderController] : nil;
 
-    if (rfc && [rfc respondsToSelector:@selector(presentPageManagementAnimated:)]) {
-        [rfc presentPageManagementAnimated:YES];
-    } else if (rfc && [rfc respondsToSelector:@selector(setPageManagementMode:)]) {
-        [rfc setPageManagementMode:YES];
+    // 1. Primary iOS 15 trigger: native page control tap while editing
+    if ([self respondsToSelector:@selector(pageControl)]) {
+        UIControl *pc = [self pageControl];
+        if ([pc isKindOfClass:[UIControl class]]) {
+            [pc sendActionsForControlEvents:UIControlEventTouchUpInside];
+            return;
+        }
+    }
+
+    // 2. Fallback selectors on SBRootFolderController
+    if (rfc) {
+        if ([rfc respondsToSelector:@selector(folderViewDidTapPageControl:)]) {
+            [rfc folderViewDidTapPageControl:self];
+            return;
+        }
+        if ([rfc respondsToSelector:@selector(enterPageManagementMode)]) {
+            [rfc enterPageManagementMode];
+            return;
+        }
+        if ([rfc respondsToSelector:@selector(presentPageManagementAnimated:)]) {
+            [rfc presentPageManagementAnimated:YES];
+            return;
+        }
+        if ([rfc respondsToSelector:@selector(setPageManagementMode:)]) {
+            [rfc setPageManagementMode:YES];
+            return;
+        }
     }
 }
 
 %end
 
 %end
+
+@implementation IOS27HomeCustomizeSheet (DismissHelper)
+- (void)ios27_dismissSelf {
+    void (^cb)(void) = objc_getAssociatedObject(self, "closeBlock");
+    if (cb) cb();
+}
+@end
 
 %ctor {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
