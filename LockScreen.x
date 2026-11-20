@@ -9,6 +9,7 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 
 @interface SBFLockScreenDateView : UIView
 - (void)ios27_handleNotificationChange:(NSNotification *)note;
+- (void)ios27_applyClockStyle;
 @end
 
 @interface CSQuickActionsButton : UIControl
@@ -18,7 +19,6 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 - (BOOL)hasVisibleContent;
 - (void)insertNotificationRequest:(id)request;
 - (void)removeNotificationRequest:(id)request;
-- (void)modifyNotificationRequest:(id)request;
 @end
 
 @interface NCNotificationMasterList : NSObject
@@ -27,6 +27,39 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 - (void)removeNotificationRequest:(id)request;
 - (void)clearAllNotificationRequests;
 @end
+
+static UIFont *iOS27ClockFontForIndex(NSInteger idx) {
+    UIFontDescriptor *base = [UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy].fontDescriptor;
+    switch (idx) {
+        case 1:
+            return [UIFont systemFontOfSize:78.0 weight:UIFontWeightBold];
+        case 2: {
+            UIFontDescriptor *serif = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignSerif];
+            return serif ? [UIFont fontWithDescriptor:serif size:78.0] : [UIFont fontWithName:@"Georgia-Bold" size:74.0];
+        }
+        case 3: {
+            UIFontDescriptor *mono = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignMonospaced];
+            return mono ? [UIFont fontWithDescriptor:mono size:72.0] : [UIFont monospacedDigitSystemFontOfSize:74.0 weight:UIFontWeightBold];
+        }
+        case 4:
+            return [UIFont systemFontOfSize:80.0 weight:UIFontWeightThin];
+        default: {
+            UIFontDescriptor *rounded = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
+            return rounded ? [UIFont fontWithDescriptor:rounded size:78.0] : [UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy];
+        }
+    }
+}
+
+static UIColor *iOS27ClockColorForIndex(NSInteger idx) {
+    switch (idx) {
+        case 1: return [UIColor colorWithWhite:1.0 alpha:0.96];                                // Pure White
+        case 2: return [UIColor colorWithRed:0.65 green:1.00 blue:0.85 alpha:0.95];             // Neon Mint
+        case 3: return [UIColor colorWithRed:1.00 green:0.88 blue:0.55 alpha:0.95];             // Sunset Gold
+        case 4: return [UIColor colorWithRed:1.00 green:0.75 blue:0.84 alpha:0.95];             // Soft Rose
+        case 5: return [UIColor colorWithRed:0.82 green:0.76 blue:1.00 alpha:0.95];             // Lavender
+        default: return [UIColor colorWithRed:0.88 green:0.96 blue:1.00 alpha:0.95];            // Ice Cyan
+    }
+}
 
 static void ApplyLSGlassySheen(UIView *view, CGFloat radius, CGFloat alpha) {
     view.backgroundColor = [UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:alpha];
@@ -73,7 +106,6 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 %group LockScreenHooks
 
 %hook NCNotificationStructuredListViewController
-
 - (void)insertNotificationRequest:(id)request {
     %orig;
     if ([self respondsToSelector:@selector(hasVisibleContent)]) {
@@ -82,44 +114,37 @@ static void PostLSNotificationState(BOOL hasNotifs) {
         PostLSNotificationState(YES);
     }
 }
-
 - (void)removeNotificationRequest:(id)request {
     %orig;
     if ([self respondsToSelector:@selector(hasVisibleContent)]) {
         PostLSNotificationState([self hasVisibleContent]);
     }
 }
-
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
     if ([self respondsToSelector:@selector(hasVisibleContent)]) {
         PostLSNotificationState([self hasVisibleContent]);
     }
 }
-
 %end
 
 %hook NCNotificationMasterList
-
 - (void)insertNotificationRequest:(id)request {
     %orig;
     if ([self respondsToSelector:@selector(notificationCount)]) {
         PostLSNotificationState([self notificationCount] > 0);
     }
 }
-
 - (void)removeNotificationRequest:(id)request {
     %orig;
     if ([self respondsToSelector:@selector(notificationCount)]) {
         PostLSNotificationState([self notificationCount] > 0);
     }
 }
-
 - (void)clearAllNotificationRequests {
     %orig;
     PostLSNotificationState(NO);
 }
-
 %end
 
 %hook SBFLockScreenDateView
@@ -127,16 +152,8 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 - (void)layoutSubviews {
     %orig;
 
-    UILabel *timeLabel = [self valueForKey:@"_timeLabel"];
-    if ([timeLabel isKindOfClass:[UILabel class]]) {
-        UIFontDescriptor *desc = [[UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy].fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
-        if (desc) {
-            timeLabel.font = [UIFont fontWithDescriptor:desc size:78.0];
-        }
-        timeLabel.textColor = [UIColor colorWithRed:0.88 green:0.96 blue:1.0 alpha:0.95];
-    }
+    [self ios27_applyClockStyle];
 
-    // Register notification observer once per view instance
     static const void *kObserverKey = &kObserverKey;
     if (!objc_getAssociatedObject(self, kObserverKey)) {
         objc_setAssociatedObject(self, kObserverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -144,9 +161,12 @@ static void PostLSNotificationState(BOOL hasNotifs) {
                                                  selector:@selector(ios27_handleNotificationChange:)
                                                      name:kIOS27NotifStateChanged
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ios27_applyClockStyle)
+                                                     name:kIOS27LSStyleChanged
+                                                   object:nil];
     }
 
-    // Hello + Device Name Glass Pill (Tag: 27101)
     UIView *widgetPill = [self viewWithTag:27101];
     if (!widgetPill) {
         widgetPill = [[UIView alloc] initWithFrame:CGRectZero];
@@ -167,8 +187,6 @@ static void PostLSNotificationState(BOOL hasNotifs) {
     UILabel *helloLabel = (UILabel *)[widgetPill viewWithTag:27102];
     if (helloLabel) {
         NSString *deviceName = [UIDevice currentDevice].name ?: @"iPhone";
-
-        // Apple Hello Screen jaisa cursive font + Device Name
         UIFont *helloFont = [UIFont fontWithName:@"SnellRoundhand-Bold" size:22.0] ?: [UIFont italicSystemFontOfSize:20.0];
         UIFont *nameFont = [UIFont systemFontOfSize:13.5 weight:UIFontWeightSemibold];
 
@@ -198,6 +216,17 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 }
 
 %new
+- (void)ios27_applyClockStyle {
+    UILabel *timeLabel = [self valueForKey:@"_timeLabel"];
+    if ([timeLabel isKindOfClass:[UILabel class]]) {
+        NSInteger fontIdx = iOS27IntPref(@"kLSClockFontIndex", 0);
+        NSInteger colorIdx = iOS27IntPref(@"kLSClockColorIndex", 0);
+        timeLabel.font = iOS27ClockFontForIndex(fontIdx);
+        timeLabel.textColor = iOS27ClockColorForIndex(colorIdx);
+    }
+}
+
+%new
 - (void)ios27_handleNotificationChange:(NSNotification *)note {
     BOOL hasNotifs = [note.userInfo[@"hasNotifications"] boolValue];
     UIView *widgetPill = [self viewWithTag:27101];
@@ -214,7 +243,6 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 %end
 
 %hook CSQuickActionsButton
-
 - (void)layoutSubviews {
     %orig;
     for (UIView *sub in self.subviews) {
@@ -224,7 +252,6 @@ static void PostLSNotificationState(BOOL hasNotifs) {
     }
     ApplyLSGlassySheen(self, self.bounds.size.width / 2.0, gLSGlassAlpha);
 }
-
 %end
 
 %end
