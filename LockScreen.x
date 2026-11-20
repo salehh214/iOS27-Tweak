@@ -7,9 +7,22 @@ static CGFloat gLSGlassAlpha = 0.25;
 static BOOL gHasLSNotifications = NO;
 static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChanged";
 
+@interface _UILegibilitySettings : NSObject
+- (instancetype)initWithStyle:(NSInteger)style primaryColor:(UIColor *)primary secondaryColor:(UIColor *)secondary shadowColor:(UIColor *)shadow;
+@end
+
+@interface SBUILegibilityLabel : UIView
+@property (nonatomic, strong) UIFont *font;
+@property (nonatomic, strong) UIColor *textColor;
+@property (nonatomic, strong) _UILegibilitySettings *legibilitySettings;
+- (void)_updateLegibilityView;
+@end
+
 @interface SBFLockScreenDateView : UIView
 - (void)ios27_handleNotificationChange:(NSNotification *)note;
 - (void)ios27_applyClockStyle;
+- (void)_updateLabels;
+- (void)setLegibilitySettings:(id)settings;
 @end
 
 @interface CSQuickActionsButton : UIControl
@@ -39,10 +52,10 @@ static UIFont *iOS27ClockFontForIndex(NSInteger idx) {
         }
         case 3: {
             UIFontDescriptor *mono = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignMonospaced];
-            return mono ? [UIFont fontWithDescriptor:mono size:72.0] : [UIFont monospacedDigitSystemFontOfSize:74.0 weight:UIFontWeightBold];
+            return mono ? [UIFont fontWithDescriptor:mono size:70.0] : [UIFont monospacedDigitSystemFontOfSize:72.0 weight:UIFontWeightBold];
         }
         case 4:
-            return [UIFont systemFontOfSize:80.0 weight:UIFontWeightThin];
+            return [UIFont systemFontOfSize:82.0 weight:UIFontWeightUltraLight];
         default: {
             UIFontDescriptor *rounded = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
             return rounded ? [UIFont fontWithDescriptor:rounded size:78.0] : [UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy];
@@ -52,12 +65,14 @@ static UIFont *iOS27ClockFontForIndex(NSInteger idx) {
 
 static UIColor *iOS27ClockColorForIndex(NSInteger idx) {
     switch (idx) {
-        case 1: return [UIColor colorWithWhite:1.0 alpha:0.96];                                // Pure White
-        case 2: return [UIColor colorWithRed:0.65 green:1.00 blue:0.85 alpha:0.95];             // Neon Mint
-        case 3: return [UIColor colorWithRed:1.00 green:0.88 blue:0.55 alpha:0.95];             // Sunset Gold
-        case 4: return [UIColor colorWithRed:1.00 green:0.75 blue:0.84 alpha:0.95];             // Soft Rose
-        case 5: return [UIColor colorWithRed:0.82 green:0.76 blue:1.00 alpha:0.95];             // Lavender
-        default: return [UIColor colorWithRed:0.88 green:0.96 blue:1.00 alpha:0.95];            // Ice Cyan
+        case 1: return [UIColor colorWithWhite:1.0 alpha:0.98];                                // Pure White
+        case 2: return [UIColor colorWithRed:0.55 green:1.00 blue:0.80 alpha:0.96];             // Neon Mint
+        case 3: return [UIColor colorWithRed:1.00 green:0.84 blue:0.42 alpha:0.96];             // Sunset Gold
+        case 4: return [UIColor colorWithRed:1.00 green:0.68 blue:0.80 alpha:0.96];             // Soft Rose
+        case 5: return [UIColor colorWithRed:0.80 green:0.70 blue:1.00 alpha:0.96];             // Lavender
+        case 6: return [UIColor colorWithRed:1.00 green:0.52 blue:0.32 alpha:0.96];             // Vibrant Orange
+        case 7: return [UIColor colorWithRed:0.35 green:0.82 blue:1.00 alpha:0.96];             // Electric Blue
+        default: return [UIColor colorWithRed:0.88 green:0.96 blue:1.00 alpha:0.96];            // Ice Cyan
     }
 }
 
@@ -149,6 +164,16 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
 %hook SBFLockScreenDateView
 
+- (void)_updateLabels {
+    %orig;
+    [self ios27_applyClockStyle];
+}
+
+- (void)setLegibilitySettings:(id)settings {
+    %orig;
+    [self ios27_applyClockStyle];
+}
+
 - (void)layoutSubviews {
     %orig;
 
@@ -217,12 +242,47 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
 %new
 - (void)ios27_applyClockStyle {
-    UILabel *timeLabel = [self valueForKey:@"_timeLabel"];
-    if ([timeLabel isKindOfClass:[UILabel class]]) {
-        NSInteger fontIdx = iOS27IntPref(@"kLSClockFontIndex", 0);
-        NSInteger colorIdx = iOS27IntPref(@"kLSClockColorIndex", 0);
-        timeLabel.font = iOS27ClockFontForIndex(fontIdx);
-        timeLabel.textColor = iOS27ClockColorForIndex(colorIdx);
+    id timeLabel = nil;
+    @try {
+        timeLabel = [self valueForKey:@"_timeLabel"];
+    } @catch (NSException *e) {}
+    if (!timeLabel) return;
+
+    NSInteger fontIdx = iOS27IntPref(@"kLSClockFontIndex", 0);
+    NSInteger colorIdx = iOS27IntPref(@"kLSClockColorIndex", 0);
+    UIFont *targetFont = iOS27ClockFontForIndex(fontIdx);
+    UIColor *targetColor = iOS27ClockColorForIndex(colorIdx);
+
+    if ([timeLabel respondsToSelector:@selector(setFont:)]) {
+        [timeLabel setFont:targetFont];
+    }
+    if ([timeLabel respondsToSelector:@selector(setTextColor:)]) {
+        [timeLabel setTextColor:targetColor];
+    }
+
+    Class legClass = NSClassFromString(@"_UILegibilitySettings");
+    if (legClass && [timeLabel respondsToSelector:@selector(setLegibilitySettings:)]) {
+        id legSettings = [[legClass alloc] initWithStyle:1
+                                            primaryColor:targetColor
+                                          secondaryColor:targetColor
+                                             shadowColor:[UIColor colorWithWhite:0.0 alpha:0.25]];
+        [timeLabel setLegibilitySettings:legSettings];
+    }
+
+    @try {
+        UILabel *lookaside = [timeLabel valueForKey:@"_lookasideLabel"];
+        if ([lookaside isKindOfClass:[UILabel class]]) {
+            lookaside.font = targetFont;
+            lookaside.textColor = targetColor;
+        }
+    } @catch (NSException *e) {}
+
+    if ([timeLabel respondsToSelector:@selector(_updateLegibilityView)]) {
+        [timeLabel _updateLegibilityView];
+    }
+    if ([timeLabel isKindOfClass:[UIView class]]) {
+        [(UIView *)timeLabel setNeedsLayout];
+        [(UIView *)timeLabel layoutIfNeeded];
     }
 }
 
@@ -257,6 +317,7 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 %end
 
 %ctor {
+    if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
     if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableLockScreen", YES)) {
         gLSGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.25);
         %init(LockScreenHooks);
