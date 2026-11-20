@@ -7,12 +7,21 @@
 #define kPrefsSuiteName @"com.elite.ios27"
 #define kIOS27LSStyleChanged @"iOS27LSStyleDidChange"
 #define kIOS27WallpaperChanged @"iOS27WallpaperDidChange"
+#define kIOS27HSStyleChanged @"iOS27HSStyleDidChange"
+#define kIOS27HSEditingChanged @"iOS27HSEditingDidChange"
 #define kIOS27ThemeCount 12
+#define kIOS27HSColorCount 10
 
 static inline BOOL iOS27BoolPref(NSString *key, BOOL defaultValue) {
     NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
     id val = [prefs objectForKey:key];
     return val ? [val boolValue] : defaultValue;
+}
+
+static inline void iOS27SetBoolPref(NSString *key, BOOL value) {
+    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    [prefs setBool:value forKey:key];
+    [prefs synchronize];
 }
 
 static inline CGFloat iOS27FloatPref(NSString *key, CGFloat defaultValue) {
@@ -46,13 +55,16 @@ static inline NSString *iOS27PhotoPathForName(NSString *fileName) {
     return [iOS27WallpapersDir() stringByAppendingPathComponent:fileName];
 }
 
+static inline NSString *iOS27HomePhotoPath(void) {
+    return [iOS27WallpapersDir() stringByAppendingPathComponent:@"HomeScreen_Custom.jpg"];
+}
+
 static inline NSMutableArray<NSDictionary *> *iOS27LoadSavedWallpapers(void) {
     NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
     NSArray *saved = [prefs arrayForKey:@"kSavedWallpapers"];
     if ([saved isKindOfClass:[NSArray class]] && saved.count > 0) {
         return [saved mutableCopy];
     }
-    // Default 2 starter cards so switcher carousel works immediately
     NSMutableArray *defaults = [NSMutableArray arrayWithObjects:
         @{
             @"id": @"default-1",
@@ -120,14 +132,96 @@ static inline UIFont *iOS27ClockFontForIndex(NSInteger idx, CGFloat size) {
 
 static inline UIColor *iOS27ClockColorForIndex(NSInteger idx) {
     switch (idx % 8) {
-        case 1: return [UIColor colorWithWhite:1.0 alpha:0.98];                    // Pure White
-        case 2: return [UIColor colorWithRed:0.45 green:1.00 blue:0.78 alpha:0.98]; // Neon Mint
-        case 3: return [UIColor colorWithRed:1.00 green:0.84 blue:0.35 alpha:0.98]; // Sunset Gold
-        case 4: return [UIColor colorWithRed:1.00 green:0.62 blue:0.78 alpha:0.98]; // Soft Rose
-        case 5: return [UIColor colorWithRed:0.78 green:0.65 blue:1.00 alpha:0.98]; // Lavender
-        case 6: return [UIColor colorWithRed:1.00 green:0.48 blue:0.25 alpha:0.98]; // Vibrant Orange
-        case 7: return [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:0.98]; // Electric Blue
-        default: return [UIColor colorWithRed:0.86 green:0.96 blue:1.00 alpha:0.98];// Ice Cyan
+        case 1: return [UIColor colorWithWhite:1.0 alpha:0.98];
+        case 2: return [UIColor colorWithRed:0.45 green:1.00 blue:0.78 alpha:0.98];
+        case 3: return [UIColor colorWithRed:1.00 green:0.84 blue:0.35 alpha:0.98];
+        case 4: return [UIColor colorWithRed:1.00 green:0.62 blue:0.78 alpha:0.98];
+        case 5: return [UIColor colorWithRed:0.78 green:0.65 blue:1.00 alpha:0.98];
+        case 6: return [UIColor colorWithRed:1.00 green:0.48 blue:0.25 alpha:0.98];
+        case 7: return [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:0.98];
+        default: return [UIColor colorWithRed:0.86 green:0.96 blue:1.00 alpha:0.98];
+    }
+}
+
+static inline UIColor *iOS27HSSolidColorForIndex(NSInteger idx) {
+    switch (idx % kIOS27HSColorCount) {
+        case 0: return [UIColor colorWithRed:0.05 green:0.06 blue:0.09 alpha:1.0]; // Midnight Black
+        case 1: return [UIColor colorWithRed:0.07 green:0.16 blue:0.30 alpha:1.0]; // Deep Navy
+        case 2: return [UIColor colorWithRed:0.06 green:0.24 blue:0.22 alpha:1.0]; // Forest Teal
+        case 3: return [UIColor colorWithRed:0.22 green:0.09 blue:0.30 alpha:1.0]; // Royal Plum
+        case 4: return [UIColor colorWithRed:0.32 green:0.10 blue:0.14 alpha:1.0]; // Burgundy
+        case 5: return [UIColor colorWithRed:0.14 green:0.15 blue:0.18 alpha:1.0]; // Space Gray
+        case 6: return [UIColor colorWithRed:0.09 green:0.28 blue:0.46 alpha:1.0]; // Ocean Blue
+        case 7: return [UIColor colorWithRed:0.28 green:0.22 blue:0.14 alpha:1.0]; // Warm Bronze
+        case 8: return [UIColor colorWithRed:0.12 green:0.22 blue:0.16 alpha:1.0]; // Pine Dark
+        default: return [UIColor colorWithRed:0.02 green:0.02 blue:0.03 alpha:1.0]; // Pure OLED
+    }
+}
+
+static inline NSArray *iOS27GradientColorsForTheme(NSInteger themeIdx) {
+    NSInteger safe = themeIdx % kIOS27ThemeCount;
+    if (safe < 0) safe = 0;
+    switch (safe) {
+        case 0: return @[
+            (id)[UIColor colorWithRed:0.02 green:0.10 blue:0.26 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.04 green:0.38 blue:0.58 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.10 green:0.74 blue:0.78 alpha:1.0].CGColor
+        ];
+        case 1: return @[
+            (id)[UIColor colorWithRed:0.05 green:0.03 blue:0.18 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.30 green:0.10 blue:0.46 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.08 green:0.52 blue:0.60 alpha:1.0].CGColor
+        ];
+        case 2: return @[
+            (id)[UIColor colorWithRed:0.16 green:0.05 blue:0.24 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.68 green:0.18 blue:0.36 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.96 green:0.56 blue:0.24 alpha:1.0].CGColor
+        ];
+        case 3: return @[
+            (id)[UIColor colorWithRed:0.03 green:0.04 blue:0.07 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.04 green:0.06 blue:0.10 alpha:1.0].CGColor
+        ];
+        case 4: return @[
+            (id)[UIColor colorWithRed:0.02 green:0.14 blue:0.12 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.06 green:0.42 blue:0.34 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.24 green:0.76 blue:0.56 alpha:1.0].CGColor
+        ];
+        case 5: return @[
+            (id)[UIColor colorWithRed:0.14 green:0.04 blue:0.28 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.44 green:0.14 blue:0.68 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.84 green:0.36 blue:0.78 alpha:1.0].CGColor
+        ];
+        case 6: return @[
+            (id)[UIColor colorWithRed:0.24 green:0.04 blue:0.06 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.78 green:0.20 blue:0.12 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.98 green:0.74 blue:0.20 alpha:1.0].CGColor
+        ];
+        case 7: return @[
+            (id)[UIColor colorWithRed:0.14 green:0.28 blue:0.48 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.42 green:0.68 blue:0.88 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.82 green:0.92 blue:0.98 alpha:1.0].CGColor
+        ];
+        case 8: return @[
+            (id)[UIColor colorWithRed:0.28 green:0.08 blue:0.20 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.76 green:0.32 blue:0.48 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.98 green:0.74 blue:0.80 alpha:1.0].CGColor
+        ];
+        case 9: return @[
+            (id)[UIColor colorWithRed:0.02 green:0.02 blue:0.08 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.08 green:0.10 blue:0.30 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.18 green:0.08 blue:0.34 alpha:1.0].CGColor
+        ];
+        case 10: return @[
+            (id)[UIColor colorWithRed:0.16 green:0.10 blue:0.04 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.58 green:0.38 blue:0.14 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.94 green:0.78 blue:0.42 alpha:1.0].CGColor
+        ];
+        default: return @[
+            (id)[UIColor colorWithRed:0.06 green:0.04 blue:0.22 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.86 green:0.12 blue:0.52 alpha:1.0].CGColor,
+            (id)[UIColor colorWithRed:0.08 green:0.82 blue:0.92 alpha:1.0].CGColor
+        ];
     }
 }
 
@@ -176,102 +270,70 @@ static inline void iOS27ApplyProfileToImageView(NSDictionary *profile, UIImageVi
     grad.frame = wpView.bounds;
     grad.startPoint = CGPointMake(0.1, 0.0);
     grad.endPoint = CGPointMake(0.9, 1.0);
-
-    NSInteger themeIdx = (mode - 2) % kIOS27ThemeCount;
-    if (themeIdx < 0) themeIdx = 0;
-
-    switch (themeIdx) {
-        case 0: // Cyber Ocean
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.02 green:0.10 blue:0.26 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.04 green:0.38 blue:0.58 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.10 green:0.74 blue:0.78 alpha:1.0].CGColor
-            ];
-            break;
-        case 1: // Midnight Aurora
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.05 green:0.03 blue:0.18 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.30 green:0.10 blue:0.46 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.08 green:0.52 blue:0.60 alpha:1.0].CGColor
-            ];
-            break;
-        case 2: // Sunset Glass
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.16 green:0.05 blue:0.24 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.68 green:0.18 blue:0.36 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.96 green:0.56 blue:0.24 alpha:1.0].CGColor
-            ];
-            break;
-        case 3: // Obsidian Minimal
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.03 green:0.04 blue:0.07 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.04 green:0.06 blue:0.10 alpha:1.0].CGColor
-            ];
-            break;
-        case 4: // Emerald Forest
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.02 green:0.14 blue:0.12 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.06 green:0.42 blue:0.34 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.24 green:0.76 blue:0.56 alpha:1.0].CGColor
-            ];
-            break;
-        case 5: // Royal Amethyst
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.14 green:0.04 blue:0.28 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.44 green:0.14 blue:0.68 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.84 green:0.36 blue:0.78 alpha:1.0].CGColor
-            ];
-            break;
-        case 6: // Solar Flare
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.24 green:0.04 blue:0.06 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.78 green:0.20 blue:0.12 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.98 green:0.74 blue:0.20 alpha:1.0].CGColor
-            ];
-            break;
-        case 7: // Arctic Frost
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.14 green:0.28 blue:0.48 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.42 green:0.68 blue:0.88 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.82 green:0.92 blue:0.98 alpha:1.0].CGColor
-            ];
-            break;
-        case 8: // Cherry Blossom
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.28 green:0.08 blue:0.20 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.76 green:0.32 blue:0.48 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.98 green:0.74 blue:0.80 alpha:1.0].CGColor
-            ];
-            break;
-        case 9: // Deep Space
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.02 green:0.02 blue:0.08 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.08 green:0.10 blue:0.30 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.18 green:0.08 blue:0.34 alpha:1.0].CGColor
-            ];
-            break;
-        case 10: // Golden Horizon
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.16 green:0.10 blue:0.04 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.58 green:0.38 blue:0.14 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.94 green:0.78 blue:0.42 alpha:1.0].CGColor
-            ];
-            break;
-        default: // Neon Cyberpunk
-            grad.colors = @[
-                (id)[UIColor colorWithRed:0.06 green:0.04 blue:0.22 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.86 green:0.12 blue:0.52 alpha:1.0].CGColor,
-                (id)[UIColor colorWithRed:0.08 green:0.82 blue:0.92 alpha:1.0].CGColor
-            ];
-            break;
-    }
-
+    grad.colors = iOS27GradientColorsForTheme(mode - 2);
     [wpView.layer insertSublayer:grad atIndex:0];
 }
 
 static inline void iOS27ApplyWallpaperToView(UIImageView *wpView) {
     iOS27ApplyProfileToImageView(iOS27ActiveWallpaperProfile(), wpView, NO);
+}
+
+// Home Screen Independent Wallpaper Engine (Pair / Color / Gradient / Photo + Lightweight Fake-Blur Veil)
+static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger hsMode, NSInteger colorIdx, NSInteger gradIdx, BOOL blurOn, BOOL isPreview) {
+    if (!wpView) return;
+
+    for (CALayer *sub in [wpView.layer.sublayers copy]) {
+        if ([sub.name isEqualToString:@"iOS27PresetGradient"]) {
+            [sub removeFromSuperlayer];
+        }
+    }
+
+    if (hsMode == 0) {
+        // Pair with Lock Screen
+        iOS27ApplyProfileToImageView(iOS27ActiveWallpaperProfile(), wpView, isPreview);
+    } else if (hsMode == 1) {
+        // Solid Color
+        wpView.image = nil;
+        wpView.hidden = NO;
+        wpView.backgroundColor = iOS27HSSolidColorForIndex(colorIdx);
+    } else if (hsMode == 2) {
+        // Gradient
+        wpView.image = nil;
+        wpView.hidden = NO;
+        CAGradientLayer *grad = [CAGradientLayer layer];
+        grad.name = @"iOS27PresetGradient";
+        grad.frame = wpView.bounds;
+        grad.startPoint = CGPointMake(0.1, 0.0);
+        grad.endPoint = CGPointMake(0.9, 1.0);
+        grad.colors = iOS27GradientColorsForTheme(gradIdx);
+        [wpView.layer insertSublayer:grad atIndex:0];
+    } else if (hsMode == 3) {
+        // Custom Home Photo
+        UIImage *img = [UIImage imageWithContentsOfFile:iOS27HomePhotoPath()];
+        if (img) {
+            wpView.image = img;
+            wpView.hidden = NO;
+        } else {
+            iOS27ApplyProfileToImageView(iOS27ActiveWallpaperProfile(), wpView, isPreview);
+        }
+    }
+
+    // Zero-Lag Fake Blur Overlay (No UIVisualEffectView)
+    UIView *frost = [wpView viewWithTag:27399];
+    if (blurOn && !wpView.hidden) {
+        if (!frost) {
+            frost = [[UIView alloc] initWithFrame:wpView.bounds];
+            frost.tag = 27399;
+            frost.userInteractionEnabled = NO;
+            frost.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [wpView addSubview:frost];
+        }
+        frost.frame = wpView.bounds;
+        frost.backgroundColor = [UIColor colorWithRed:0.08 green:0.10 blue:0.15 alpha:0.46];
+        frost.hidden = NO;
+    } else if (frost) {
+        frost.hidden = YES;
+    }
 }
 
 #endif
