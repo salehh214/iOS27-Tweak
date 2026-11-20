@@ -10,6 +10,7 @@ static CGFloat gEditorGlassAlpha = 0.28;
 @end
 
 @interface CSCoverSheetViewController (iOS27Editor) <PHPickerViewControllerDelegate, UIGestureRecognizerDelegate>
+- (void)ios27_ensureEditorSetup;
 - (void)ios27_setupWallpaperLayer;
 - (void)ios27_applySavedWallpaper;
 - (void)ios27_handleLongPress:(UILongPressGestureRecognizer *)gesture;
@@ -31,7 +32,7 @@ static NSString *iOS27WallpaperFilePath(void) {
 static UIImage *iOS27ResizeImageForScreen(UIImage *image) {
     if (!image) return nil;
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    CGFloat scale = MIN([UIScreen mainScreen].scale, 2.0); // Cap scale at 2x for 2GB RAM safety
+    CGFloat scale = MIN([UIScreen mainScreen].scale, 2.0);
     CGSize targetSize = CGSizeMake(screenSize.width * scale, screenSize.height * scale);
 
     CGFloat widthRatio = targetSize.width / image.size.width;
@@ -97,6 +98,7 @@ static UIButton *CreateEditorButton(NSString *symbolName, NSString *title, id ta
     return btn;
 }
 
+static const void *kGestureAddedKey = &kGestureAddedKey;
 static const void *kIsEditingKey = &kIsEditingKey;
 static const void *kEditorOverlayKey = &kEditorOverlayKey;
 
@@ -106,15 +108,12 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 
 - (void)viewDidLoad {
     %orig;
-    [self ios27_setupWallpaperLayer];
-    [self ios27_applySavedWallpaper];
+    [self ios27_ensureEditorSetup];
+}
 
-    // Long-press gesture on Lock Screen / Notification Center
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ios27_handleLongPress:)];
-    longPress.minimumPressDuration = 0.55;
-    longPress.cancelsTouchesInView = NO;
-    longPress.delegate = self;
-    [self.view addGestureRecognizer:longPress];
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    [self ios27_ensureEditorSetup];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -138,12 +137,42 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 }
 
 %new
+- (void)ios27_ensureEditorSetup {
+    [self ios27_setupWallpaperLayer];
+    [self ios27_applySavedWallpaper];
+
+    if (!objc_getAssociatedObject(self, kGestureAddedKey)) {
+        objc_setAssociatedObject(self, kGestureAddedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ios27_handleLongPress:)];
+        longPress.minimumPressDuration = 0.5;
+        longPress.allowableMovement = 25.0;
+        longPress.cancelsTouchesInView = NO;
+        longPress.delaysTouchesBegan = NO;
+        longPress.delegate = self;
+        [self.view addGestureRecognizer:longPress];
+    }
+}
+
+%new
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+
+%new
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    // Agar editor pehle se open hai to dobara trigger na kare
+    if ([objc_getAssociatedObject(self, kIsEditingKey) boolValue]) {
+        return NO;
+    }
+
     UIView *v = touch.view;
     while (v && v != self.view) {
+        NSString *cls = NSStringFromClass([v class]);
+        // Sirf actual buttons ya notification bubbles ko ignore karein (invisible list container ko nahi)
         if ([v isKindOfClass:[UIControl class]] ||
-            [NSStringFromClass([v class]) containsString:@"Notification"] ||
-            [NSStringFromClass([v class]) containsString:@"Platter"]) {
+            [cls containsString:@"ShortLook"] ||
+            [cls containsString:@"PlatterView"]) {
             return NO;
         }
         v = v.superview;
@@ -176,7 +205,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
         }
     }
 
-    // Mode: 0 = Stock iOS Wallpaper, 1 = Custom Photo, 2..5 = Built-in iOS 27 Presets
     NSInteger mode = iOS27IntPref(@"kLSWallpaperMode", 0);
 
     if (mode == 0) {
@@ -198,7 +226,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
         }
     }
 
-    // Built-in Lightweight iOS 27 Gradient Themes (Zero RAM overhead)
     wpView.image = nil;
     wpView.hidden = NO;
 
@@ -209,28 +236,24 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     grad.endPoint = CGPointMake(0.9, 1.0);
 
     if (mode == 2) {
-        // Cyber Ocean
         grad.colors = @[
             (id)[UIColor colorWithRed:0.03 green:0.10 blue:0.25 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.05 green:0.35 blue:0.55 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.10 green:0.70 blue:0.75 alpha:1.0].CGColor
         ];
     } else if (mode == 3) {
-        // Midnight Aurora
         grad.colors = @[
             (id)[UIColor colorWithRed:0.06 green:0.04 blue:0.18 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.28 green:0.10 blue:0.42 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.10 green:0.45 blue:0.55 alpha:1.0].CGColor
         ];
     } else if (mode == 4) {
-        // Sunset Glass
         grad.colors = @[
             (id)[UIColor colorWithRed:0.15 green:0.05 blue:0.22 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.65 green:0.18 blue:0.35 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.95 green:0.55 blue:0.25 alpha:1.0].CGColor
         ];
     } else {
-        // Obsidian Minimal
         grad.colors = @[
             (id)[UIColor colorWithRed:0.04 green:0.05 blue:0.08 alpha:1.0].CGColor,
             (id)[UIColor colorWithRed:0.12 green:0.15 blue:0.22 alpha:1.0].CGColor,
