@@ -110,6 +110,10 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
                                                  selector:@selector(ios27_syncHomeWallpaper)
                                                      name:kIOS27WallpaperChanged
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(ios27_syncHomeWallpaper)
+                                                     name:kIOS27HSStyleChanged
+                                                   object:nil];
     }
 }
 
@@ -138,19 +142,62 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         wpView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self.view insertSubview:wpView atIndex:0];
     }
-    iOS27ApplyWallpaperToView(wpView);
+
+    NSInteger hsMode = iOS27IntPref(@"kHSWallpaperMode", 0);
+    NSInteger colorIdx = iOS27IntPref(@"kHSColorIndex", 0);
+    NSInteger gradIdx = iOS27IntPref(@"kHSGradientIndex", 0);
+    BOOL blurOn = iOS27BoolPref(@"kHSBlurEnabled", NO);
+    iOS27ApplyHomeWallpaperToView(wpView, hsMode, colorIdx, gradIdx, blurOn, NO);
 }
 
 %end
 
 %hook SBIconView
+
 - (void)setLabelHidden:(BOOL)hidden {
-    %orig(YES);
+    BOOL hideLabels = iOS27BoolPref(@"kHSHideLabels", YES);
+    %orig(hideLabels ? YES : hidden);
 }
+
 - (void)layoutSubviews {
     %orig;
-    self.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", NO);
+    CGFloat scale = largeIcons ? 1.04 : 0.94;
+    self.transform = CGAffineTransformMakeScale(scale, scale);
+
+    // Lightweight Icon Appearance Style (0 = Default, 1 = Dark, 2 = Tinted)
+    NSInteger iconStyle = iOS27IntPref(@"kHSIconStyle", 0);
+    UIView *iconImgView = nil;
+    @try {
+        iconImgView = [self valueForKey:@"_iconImageView"];
+    } @catch (NSException *e) {}
+
+    if ([iconImgView isKindOfClass:[UIView class]]) {
+        UIView *tintVeil = [iconImgView viewWithTag:27888];
+        if (iconStyle == 0) {
+            if (tintVeil) tintVeil.hidden = YES;
+        } else {
+            if (!tintVeil) {
+                tintVeil = [[UIView alloc] initWithFrame:iconImgView.bounds];
+                tintVeil.tag = 27888;
+                tintVeil.userInteractionEnabled = NO;
+                tintVeil.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                tintVeil.layer.cornerRadius = 13.0;
+                tintVeil.layer.cornerCurve = kCACornerCurveContinuous;
+                tintVeil.clipsToBounds = YES;
+                [iconImgView addSubview:tintVeil];
+            }
+            tintVeil.frame = iconImgView.bounds;
+            tintVeil.hidden = NO;
+            if (iconStyle == 1) {
+                tintVeil.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.28];
+            } else {
+                tintVeil.backgroundColor = [UIColor colorWithRed:0.15 green:0.55 blue:0.95 alpha:0.30];
+            }
+        }
+    }
 }
+
 %end
 
 %hook SBDockView
