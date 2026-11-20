@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
-#import <PhotosUI/PhotosUI.h>
+#import <ImageIO/ImageIO.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
 #import "iOS27Prefs.h"
 
@@ -9,48 +10,41 @@ static CGFloat gEditorGlassAlpha = 0.28;
 @interface CSCoverSheetViewController : UIViewController
 @end
 
-@interface CSCoverSheetViewController (iOS27Editor) <PHPickerViewControllerDelegate, UIGestureRecognizerDelegate>
+@interface SBCoverSheetPresentationManager : NSObject
++ (instancetype)sharedInstance;
+- (BOOL)isPresented;
+- (void)setCoverSheetPresented:(BOOL)presented animated:(BOOL)animated withCompletion:(void (^)(void))completion;
+@end
+
+@interface PSSpecifier : NSObject
+- (NSString *)identifier;
+- (NSString *)name;
+@end
+
+@interface PSUIPrefsListController : UIViewController
+- (PSSpecifier *)specifierAtIndexPath:(NSIndexPath *)indexPath;
+@end
+
+@interface CSCoverSheetViewController (iOS27Editor) <UIGestureRecognizerDelegate>
 - (void)ios27_ensureEditorSetup;
 - (void)ios27_setupWallpaperLayer;
 - (void)ios27_applySavedWallpaper;
 - (void)ios27_handleLongPress:(UILongPressGestureRecognizer *)gesture;
 - (void)ios27_enterEditorMode;
 - (void)ios27_exitEditorMode;
-- (void)ios27_openPhotoPicker;
+- (void)ios27_showCustomizeIconsBar;
+- (void)ios27_showMainSwitcherBar;
+- (void)ios27_openSafePhotoSheet;
 - (void)ios27_cycleWallpaperPreset;
 - (void)ios27_cycleClockFont;
 - (void)ios27_cycleClockColor;
 - (void)ios27_resetWallpaper;
 @end
 
-static NSString *iOS27WallpaperFilePath(void) {
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
-    NSString *libDir = paths.firstObject ?: @"/var/mobile/Library";
-    return [libDir stringByAppendingPathComponent:@"Preferences/iOS27_CustomLSWallpaper.jpg"];
-}
-
-static UIImage *iOS27ResizeImageForScreen(UIImage *image) {
-    if (!image) return nil;
-    CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    CGFloat scale = MIN([UIScreen mainScreen].scale, 2.0);
-    CGSize targetSize = CGSizeMake(screenSize.width * scale, screenSize.height * scale);
-
-    CGFloat widthRatio = targetSize.width / image.size.width;
-    CGFloat heightRatio = targetSize.height / image.size.height;
-    CGFloat ratio = MAX(widthRatio, heightRatio);
-    CGSize newSize = CGSizeMake(image.size.width * ratio, image.size.height * ratio);
-
-    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat defaultFormat];
-    fmt.scale = 1.0;
-    fmt.opaque = YES;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:newSize format:fmt];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-        [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
-    }];
-}
+static __weak CSCoverSheetViewController *gActiveCoverSheetVC = nil;
 
 static void ApplyEditorGlass(UIView *view, CGFloat radius) {
-    view.backgroundColor = [UIColor colorWithRed:0.08 green:0.12 blue:0.20 alpha:MAX(gEditorGlassAlpha, 0.35)];
+    view.backgroundColor = [UIColor colorWithRed:0.08 green:0.12 blue:0.20 alpha:MAX(gEditorGlassAlpha, 0.40)];
     view.layer.cornerRadius = radius;
     view.layer.cornerCurve = kCACornerCurveContinuous;
     view.layer.borderWidth = 1.1;
@@ -68,7 +62,7 @@ static void ApplyEditorGlass(UIView *view, CGFloat radius) {
         sheen = [CAGradientLayer layer];
         sheen.name = @"iOS27EditorSheen";
         sheen.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.25].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.26].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor
         ];
@@ -79,21 +73,179 @@ static void ApplyEditorGlass(UIView *view, CGFloat radius) {
     sheen.cornerRadius = radius;
 }
 
-static UIButton *CreateEditorButton(NSString *symbolName, NSString *title, id target, SEL action) {
-    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-    btn.titleLabel.font = [UIFont systemFontOfSize:11.0 weight:UIFontWeightSemibold];
-    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [btn setTitle:title forState:UIControlStateNormal];
+static UIImage *iOS27LoadThumbnailAtPath(NSString *path, CGFloat maxPixelSize) {
+    NSURL *url = [NSURL fileURLWithPath:path];
+    CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)url, NULL);
+    if (!src) return nil;
 
+    NSDictionary *opts = @{
+        (id)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+        (id)kCGImageSourceCreateThumbnailWithTransform: @YES,
+        (id)kCGImageSourceThumbnailMaxPixelSize: @(maxPixelSize),
+        (id)kCGImageSourceShouldCacheImmediately: @YES
+    };
+    CGImageRef cgImg = CGImageSourceCreateThumbnailAtIndex(src, 0, (__bridge CFDictionaryRef)opts);
+    CFRelease(src);
+    if (!cgImg) return nil;
+
+    UIImage *img = [UIImage imageWithCGImage:cgImg];
+    CGImageRelease(cgImg);
+    return img;
+}
+
+static NSArray<NSString *> *iOS27ScanCameraRollPhotos(void) {
+    NSString *dcimPath = @"/var/mobile/Media/DCIM";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+
+    NSDirectoryEnumerator *enumerator = [fm enumeratorAtPath:dcimPath];
+    NSString *relPath = nil;
+    while ((relPath = [enumerator nextObject])) {
+        NSString *ext = [[relPath pathExtension] lowercaseString];
+        if ([ext isEqualToString:@"jpg"] || [ext isEqualToString:@"jpeg"] ||
+            [ext isEqualToString:@"png"] || [ext isEqualToString:@"heic"]) {
+            NSString *fullPath = [dcimPath stringByAppendingPathComponent:relPath];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:fullPath error:nil];
+            NSDate *modDate = attrs[NSFileModificationDate] ?: [NSDate distantPast];
+            [items addObject:@{@"path": fullPath, @"date": modDate}];
+        }
+    }
+
+    // Sort newest photos first
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [b[@"date"] compare:a[@"date"]];
+    }];
+
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    NSUInteger limit = MIN(items.count, (NSUInteger)60); // Cap at 60 for 2GB RAM speed
+    for (NSUInteger i = 0; i < limit; i++) {
+        [result addObject:items[i][@"path"]];
+    }
+    return result;
+}
+
+// Crash-Free Lightweight In-SpringBoard Photo Gallery Sheet
+@interface IOS27SafePhotoSheet : UIView <UICollectionViewDataSource, UICollectionViewDelegate>
+@property (nonatomic, strong) NSArray<NSString *> *photoPaths;
+@property (nonatomic, strong) NSCache<NSString *, UIImage *> *thumbCache;
+@property (nonatomic, copy) void (^onSelectPath)(NSString *path);
+@property (nonatomic, copy) void (^onClose)(void);
+@end
+
+@implementation IOS27SafePhotoSheet
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.thumbCache = [[NSCache alloc] init];
+        self.thumbCache.countLimit = 45;
+        self.photoPaths = iOS27ScanCameraRollPhotos();
+
+        ApplyEditorGlass(self, 28.0);
+
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, frame.size.width - 80, 28)];
+        title.text = @"Photos";
+        title.font = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+        title.textColor = [UIColor whiteColor];
+        [self addSubview:title];
+
+        UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        closeBtn.frame = CGRectMake(frame.size.width - 44, 10, 32, 32);
+        if (@available(iOS 13.0, *)) {
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightBold];
+            [closeBtn setImage:[UIImage systemImageNamed:@"xmark.circle.fill" withConfiguration:cfg] forState:UIControlStateNormal];
+            closeBtn.tintColor = [UIColor colorWithWhite:1.0 alpha:0.85];
+        } else {
+            [closeBtn setTitle:@"X" forState:UIControlStateNormal];
+        }
+        [closeBtn addTarget:self action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:closeBtn];
+
+        if (self.photoPaths.count == 0) {
+            UILabel *empty = [[UILabel alloc] initWithFrame:CGRectMake(20, 60, frame.size.width - 40, 80)];
+            empty.text = @"No photos found in Camera Roll.";
+            empty.textAlignment = NSTextAlignmentCenter;
+            empty.textColor = [UIColor colorWithWhite:1.0 alpha:0.8];
+            empty.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+            [self addSubview:empty];
+        } else {
+            UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
+            CGFloat spacing = 6.0;
+            CGFloat itemW = floor((frame.size.width - 24.0 - spacing * 2.0) / 3.0);
+            layout.itemSize = CGSizeMake(itemW, itemW * 1.25);
+            layout.minimumInteritemSpacing = spacing;
+            layout.minimumLineSpacing = spacing;
+            layout.sectionInset = UIEdgeInsetsMake(6, 12, 16, 12);
+
+            UICollectionView *cv = [[UICollectionView alloc] initWithFrame:CGRectMake(0, 48, frame.size.width, frame.size.height - 48) collectionViewLayout:layout];
+            cv.backgroundColor = [UIColor clearColor];
+            cv.dataSource = self;
+            cv.delegate = self;
+            [cv registerClass:[UICollectionViewCell class] forCellWithReuseIdentifier:@"PhotoCell"];
+            [self addSubview:cv];
+        }
+    }
+    return self;
+}
+
+- (void)closeTapped {
+    if (self.onClose) self.onClose();
+}
+
+- (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section {
+    return self.photoPaths.count;
+}
+
+- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
+    UICollectionViewCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:@"PhotoCell" forIndexPath:indexPath];
+    UIImageView *iv = (UIImageView *)[cell.contentView viewWithTag:901];
+    if (!iv) {
+        iv = [[UIImageView alloc] initWithFrame:cell.contentView.bounds];
+        iv.tag = 901;
+        iv.contentMode = UIViewContentModeScaleAspectFill;
+        iv.clipsToBounds = YES;
+        iv.layer.cornerRadius = 10.0;
+        iv.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.1];
+        iv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [cell.contentView addSubview:iv];
+    }
+
+    NSString *path = self.photoPaths[indexPath.item];
+    iv.image = nil;
+    UIImage *cached = [self.thumbCache objectForKey:path];
+    if (cached) {
+        iv.image = cached;
+    } else {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            UIImage *thumb = iOS27LoadThumbnailAtPath(path, 220.0);
+            if (thumb) {
+                [self.thumbCache setObject:thumb forKey:path];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    UICollectionViewCell *visibleCell = [collectionView cellForItemAtIndexPath:indexPath];
+                    UIImageView *visibleIV = (UIImageView *)[visibleCell.contentView viewWithTag:901];
+                    if (visibleIV) visibleIV.image = thumb;
+                });
+            }
+        });
+    }
+    return cell;
+}
+
+- (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
+    NSString *path = self.photoPaths[indexPath.item];
+    if (self.onSelectPath) self.onSelectPath(path);
+}
+
+@end
+
+static UIButton *CreateIconOnlyButton(NSString *symbolName, id target, SEL action) {
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
     if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:15.0 weight:UIImageSymbolWeightMedium];
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:19.0 weight:UIImageSymbolWeightMedium];
         UIImage *img = [UIImage systemImageNamed:symbolName withConfiguration:cfg];
         [btn setImage:img forState:UIControlStateNormal];
         btn.tintColor = [UIColor whiteColor];
     }
-
-    btn.contentEdgeInsets = UIEdgeInsetsMake(6, 6, 6, 6);
-    btn.titleEdgeInsets = UIEdgeInsetsMake(0, 4, 0, -4);
     [btn addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
     return btn;
 }
@@ -101,6 +253,26 @@ static UIButton *CreateEditorButton(NSString *symbolName, NSString *title, id ta
 static const void *kGestureAddedKey = &kGestureAddedKey;
 static const void *kIsEditingKey = &kIsEditingKey;
 static const void *kEditorOverlayKey = &kEditorOverlayKey;
+static const void *kMainBarKey = &kMainBarKey;
+static const void *kIconsBarKey = &kIconsBarKey;
+static const void *kPhotoSheetKey = &kPhotoSheetKey;
+
+static void DarwinOpenEditorCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SBCoverSheetPresentationManager *pm = [%c(SBCoverSheetPresentationManager) sharedInstance];
+        if (pm && [pm respondsToSelector:@selector(setCoverSheetPresented:animated:withCompletion:)]) {
+            [pm setCoverSheetPresented:YES animated:YES withCompletion:^{
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    if (gActiveCoverSheetVC) {
+                        [gActiveCoverSheetVC ios27_enterEditorMode];
+                    }
+                });
+            }];
+        } else if (gActiveCoverSheetVC) {
+            [gActiveCoverSheetVC ios27_enterEditorMode];
+        }
+    });
+}
 
 %group WallpaperEditorHooks
 
@@ -108,11 +280,13 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 
 - (void)viewDidLoad {
     %orig;
+    gActiveCoverSheetVC = self;
     [self ios27_ensureEditorSetup];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    gActiveCoverSheetVC = self;
     [self ios27_ensureEditorSetup];
 }
 
@@ -161,15 +335,12 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 
 %new
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    // Agar editor pehle se open hai to dobara trigger na kare
     if ([objc_getAssociatedObject(self, kIsEditingKey) boolValue]) {
         return NO;
     }
-
     UIView *v = touch.view;
     while (v && v != self.view) {
         NSString *cls = NSStringFromClass([v class]);
-        // Sirf actual buttons ya notification bubbles ko ignore karein (invisible list container ko nahi)
         if ([v isKindOfClass:[UIControl class]] ||
             [cls containsString:@"ShortLook"] ||
             [cls containsString:@"PlatterView"]) {
@@ -197,76 +368,14 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 %new
 - (void)ios27_applySavedWallpaper {
     UIImageView *wpView = (UIImageView *)[self.view viewWithTag:27300];
-    if (!wpView) return;
-
-    for (CALayer *sub in [wpView.layer.sublayers copy]) {
-        if ([sub.name isEqualToString:@"iOS27PresetGradient"]) {
-            [sub removeFromSuperlayer];
-        }
-    }
-
-    NSInteger mode = iOS27IntPref(@"kLSWallpaperMode", 0);
-
-    if (mode == 0) {
-        wpView.image = nil;
-        wpView.hidden = YES;
-        return;
-    }
-
-    if (mode == 1) {
-        NSString *path = iOS27WallpaperFilePath();
-        UIImage *savedImg = [UIImage imageWithContentsOfFile:path];
-        if (savedImg) {
-            wpView.image = savedImg;
-            wpView.hidden = NO;
-            return;
-        } else {
-            wpView.hidden = YES;
-            return;
-        }
-    }
-
-    wpView.image = nil;
-    wpView.hidden = NO;
-
-    CAGradientLayer *grad = [CAGradientLayer layer];
-    grad.name = @"iOS27PresetGradient";
-    grad.frame = wpView.bounds;
-    grad.startPoint = CGPointMake(0.1, 0.0);
-    grad.endPoint = CGPointMake(0.9, 1.0);
-
-    if (mode == 2) {
-        grad.colors = @[
-            (id)[UIColor colorWithRed:0.03 green:0.10 blue:0.25 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.05 green:0.35 blue:0.55 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.10 green:0.70 blue:0.75 alpha:1.0].CGColor
-        ];
-    } else if (mode == 3) {
-        grad.colors = @[
-            (id)[UIColor colorWithRed:0.06 green:0.04 blue:0.18 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.28 green:0.10 blue:0.42 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.10 green:0.45 blue:0.55 alpha:1.0].CGColor
-        ];
-    } else if (mode == 4) {
-        grad.colors = @[
-            (id)[UIColor colorWithRed:0.15 green:0.05 blue:0.22 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.65 green:0.18 blue:0.35 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.95 green:0.55 blue:0.25 alpha:1.0].CGColor
-        ];
-    } else {
-        grad.colors = @[
-            (id)[UIColor colorWithRed:0.04 green:0.05 blue:0.08 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.12 green:0.15 blue:0.22 alpha:1.0].CGColor,
-            (id)[UIColor colorWithRed:0.05 green:0.07 blue:0.10 alpha:1.0].CGColor
-        ];
-    }
-    [wpView.layer insertSublayer:grad atIndex:0];
+    iOS27ApplyWallpaperToView(wpView);
+    // Notify Home Screen to sync wallpaper live
+    [[NSNotificationCenter defaultCenter] postNotificationName:kIOS27WallpaperChanged object:nil];
 }
 
 %new
 - (void)ios27_handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
-
     BOOL isEditing = [objc_getAssociatedObject(self, kIsEditingKey) boolValue];
     if (!isEditing) {
         [self ios27_enterEditorMode];
@@ -275,6 +384,7 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 
 %new
 - (void)ios27_enterEditorMode {
+    if ([objc_getAssociatedObject(self, kIsEditingKey) boolValue]) return;
     objc_setAssociatedObject(self, kIsEditingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
@@ -295,8 +405,9 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     CGFloat w = hostWindow.bounds.size.width;
     CGFloat h = hostWindow.bounds.size.height;
 
+    // Top Buttons: Reset (Left) & Done (Right)
     UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    doneBtn.frame = CGRectMake(w - 86.0, 34.0, 72.0, 32.0);
+    doneBtn.frame = CGRectMake(w - 84.0, 32.0, 70.0, 32.0);
     [doneBtn setTitle:@"Done" forState:UIControlStateNormal];
     doneBtn.titleLabel.font = [UIFont systemFontOfSize:13.5 weight:UIFontWeightBold];
     [doneBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -305,7 +416,7 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     [overlay addSubview:doneBtn];
 
     UIButton *resetBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    resetBtn.frame = CGRectMake(14.0, 34.0, 72.0, 32.0);
+    resetBtn.frame = CGRectMake(14.0, 32.0, 70.0, 32.0);
     [resetBtn setTitle:@"Reset" forState:UIControlStateNormal];
     resetBtn.titleLabel.font = [UIFont systemFontOfSize:12.5 weight:UIFontWeightSemibold];
     [resetBtn setTitleColor:[UIColor colorWithWhite:1.0 alpha:0.9] forState:UIControlStateNormal];
@@ -313,24 +424,66 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     [resetBtn addTarget:self action:@selector(ios27_resetWallpaper) forControlEvents:UIControlEventTouchUpInside];
     [overlay addSubview:resetBtn];
 
-    CGFloat dockH = 54.0;
-    CGFloat dockW = MIN(w - 24.0, 340.0);
-    UIView *dock = [[UIView alloc] initWithFrame:CGRectMake((w - dockW) / 2.0, h - dockH - 22.0, dockW, dockH)];
-    ApplyEditorGlass(dock, 27.0);
-    [overlay addSubview:dock];
+    // Stage 1 Bottom Bar: "Customize" Pill + "+" Circle Button (iOS 27 Switcher Style)
+    CGFloat barY = h - 70.0;
+    UIView *mainBar = [[UIView alloc] initWithFrame:CGRectMake(0, barY, w, 46.0)];
+    mainBar.backgroundColor = [UIColor clearColor];
 
-    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectInset(dock.bounds, 8.0, 4.0)];
+    CGFloat custW = 148.0;
+    CGFloat plusSize = 44.0;
+    CGFloat totalW = custW + 14.0 + plusSize;
+    CGFloat startX = (w - totalW) / 2.0;
+
+    UIButton *customizeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    customizeBtn.frame = CGRectMake(startX, 1.0, custW, 44.0);
+    [customizeBtn setTitle:@"Customize" forState:UIControlStateNormal];
+    customizeBtn.titleLabel.font = [UIFont systemFontOfSize:15.5 weight:UIFontWeightSemibold];
+    [customizeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    ApplyEditorGlass(customizeBtn, 22.0);
+    [customizeBtn addTarget:self action:@selector(ios27_showCustomizeIconsBar) forControlEvents:UIControlEventTouchUpInside];
+    [mainBar addSubview:customizeBtn];
+
+    UIButton *plusBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    plusBtn.frame = CGRectMake(startX + custW + 14.0, 1.0, plusSize, plusSize);
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:19.0 weight:UIImageSymbolWeightSemibold];
+        [plusBtn setImage:[UIImage systemImageNamed:@"plus" withConfiguration:cfg] forState:UIControlStateNormal];
+        plusBtn.tintColor = [UIColor whiteColor];
+    } else {
+        [plusBtn setTitle:@"+" forState:UIControlStateNormal];
+    }
+    ApplyEditorGlass(plusBtn, plusSize / 2.0);
+    [plusBtn addTarget:self action:@selector(ios27_cycleWallpaperPreset) forControlEvents:UIControlEventTouchUpInside];
+    [mainBar addSubview:plusBtn];
+
+    [overlay addSubview:mainBar];
+    objc_setAssociatedObject(self, kMainBarKey, mainBar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Stage 2 Bottom Bar: Icon-Only Customization Dock (Hidden initially until Customize is tapped)
+    CGFloat dockH = 52.0;
+    CGFloat dockW = MIN(w - 36.0, 290.0);
+    UIView *iconsDock = [[UIView alloc] initWithFrame:CGRectMake((w - dockW) / 2.0, h - dockH - 22.0, dockW, dockH)];
+    ApplyEditorGlass(iconsDock, 26.0);
+    iconsDock.alpha = 0.0;
+    iconsDock.hidden = YES;
+
+    UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectInset(iconsDock.bounds, 10.0, 4.0)];
     stack.axis = UILayoutConstraintAxisHorizontal;
     stack.distribution = UIStackViewDistributionFillEqually;
     stack.alignment = UIStackViewAlignmentFill;
-    stack.spacing = 2.0;
+    stack.spacing = 4.0;
 
-    [stack addArrangedSubview:CreateEditorButton(@"photo.on.rectangle", @"Photos", self, @selector(ios27_openPhotoPicker))];
-    [stack addArrangedSubview:CreateEditorButton(@"sparkles", @"Themes", self, @selector(ios27_cycleWallpaperPreset))];
-    [stack addArrangedSubview:CreateEditorButton(@"textformat", @"Font", self, @selector(ios27_cycleClockFont))];
-    [stack addArrangedSubview:CreateEditorButton(@"paintpalette", @"Color", self, @selector(ios27_cycleClockColor))];
-    [dock addSubview:stack];
+    [stack addArrangedSubview:CreateIconOnlyButton(@"photo.on.rectangle", self, @selector(ios27_openSafePhotoSheet))];
+    [stack addArrangedSubview:CreateIconOnlyButton(@"sparkles", self, @selector(ios27_cycleWallpaperPreset))];
+    [stack addArrangedSubview:CreateIconOnlyButton(@"textformat", self, @selector(ios27_cycleClockFont))];
+    [stack addArrangedSubview:CreateIconOnlyButton(@"paintpalette", self, @selector(ios27_cycleClockColor))];
+    [stack addArrangedSubview:CreateIconOnlyButton(@"chevron.down", self, @selector(ios27_showMainSwitcherBar))];
+    [iconsDock addSubview:stack];
 
+    [overlay addSubview:iconsDock];
+    objc_setAssociatedObject(self, kIconsBarKey, iconsDock, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Zoom-Out Card Animation
     self.view.clipsToBounds = YES;
     [UIView animateWithDuration:0.32
                           delay:0.0
@@ -338,11 +491,88 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
           initialSpringVelocity:0.6
                         options:UIViewAnimationOptionCurveEaseOut
                      animations:^{
-        self.view.transform = CGAffineTransformMakeScale(0.80, 0.80);
+        self.view.transform = CGAffineTransformMakeScale(0.78, 0.78);
         self.view.layer.cornerRadius = 30.0;
         self.view.layer.borderWidth = 2.0;
         self.view.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.55].CGColor;
         overlay.alpha = 1.0;
+    } completion:nil];
+}
+
+%new
+- (void)ios27_showCustomizeIconsBar {
+    UIView *mainBar = objc_getAssociatedObject(self, kMainBarKey);
+    UIView *iconsDock = objc_getAssociatedObject(self, kIconsBarKey);
+    iconsDock.hidden = NO;
+
+    [UIView animateWithDuration:0.22 animations:^{
+        mainBar.alpha = 0.0;
+        iconsDock.alpha = 1.0;
+    } completion:^(BOOL finished) {
+        mainBar.hidden = YES;
+    }];
+}
+
+%new
+- (void)ios27_showMainSwitcherBar {
+    UIView *mainBar = objc_getAssociatedObject(self, kMainBarKey);
+    UIView *iconsDock = objc_getAssociatedObject(self, kIconsBarKey);
+    mainBar.hidden = NO;
+
+    [UIView animateWithDuration:0.22 animations:^{
+        iconsDock.alpha = 0.0;
+        mainBar.alpha = 1.0;
+    } completion:^(BOOL finished) {
+        iconsDock.hidden = YES;
+    }];
+}
+
+%new
+- (void)ios27_openSafePhotoSheet {
+    UIView *overlay = objc_getAssociatedObject(self, kEditorOverlayKey);
+    if (!overlay) return;
+
+    UIView *oldSheet = objc_getAssociatedObject(self, kPhotoSheetKey);
+    if (oldSheet) [oldSheet removeFromSuperview];
+
+    CGFloat w = overlay.bounds.size.width;
+    CGFloat h = overlay.bounds.size.height;
+    CGFloat sheetH = h * 0.62;
+
+    IOS27SafePhotoSheet *sheet = [[IOS27SafePhotoSheet alloc] initWithFrame:CGRectMake(12.0, h, w - 24.0, sheetH)];
+    __weak typeof(self) weakSelf = self;
+    __weak typeof(sheet) weakSheet = sheet;
+
+    sheet.onClose = ^{
+        [UIView animateWithDuration:0.25 animations:^{
+            weakSheet.frame = CGRectMake(12.0, h, w - 24.0, sheetH);
+        } completion:^(BOOL finished) {
+            [weakSheet removeFromSuperview];
+            objc_setAssociatedObject(weakSelf, kPhotoSheetKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }];
+    };
+
+    sheet.onSelectPath = ^(NSString *selectedPath) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            CGFloat maxDim = MAX([UIScreen mainScreen].bounds.size.width, [UIScreen mainScreen].bounds.size.height) * MIN([UIScreen mainScreen].scale, 2.0);
+            UIImage *resized = iOS27LoadThumbnailAtPath(selectedPath, maxDim);
+            NSData *jpegData = UIImageJPEGRepresentation(resized, 0.85);
+            if (jpegData) {
+                [jpegData writeToFile:iOS27WallpaperFilePath() atomically:YES];
+                iOS27SetIntPref(@"kLSWallpaperMode", 1);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf ios27_applySavedWallpaper];
+                    if (weakSheet.onClose) weakSheet.onClose();
+                });
+            }
+        });
+    };
+
+    [overlay addSubview:sheet];
+    objc_setAssociatedObject(self, kPhotoSheetKey, sheet, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    [UIView animateWithDuration:0.28 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        sheet.frame = CGRectMake(12.0, h - sheetH - 16.0, w - 24.0, sheetH);
     } completion:nil];
 }
 
@@ -362,55 +592,17 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     } completion:^(BOOL finished) {
         [overlay removeFromSuperview];
         objc_setAssociatedObject(self, kEditorOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }];
-}
-
-%new
-- (void)ios27_openPhotoPicker {
-    if (@available(iOS 14.0, *)) {
-        UIView *overlay = objc_getAssociatedObject(self, kEditorOverlayKey);
-        overlay.hidden = YES;
-
-        PHPickerConfiguration *config = [[PHPickerConfiguration alloc] init];
-        config.selectionLimit = 1;
-        config.filter = [PHPickerFilter imagesFilter];
-
-        PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
-        picker.delegate = self;
-        picker.modalPresentationStyle = UIModalPresentationFormSheet;
-        [self presentViewController:picker animated:YES completion:nil];
-    }
-}
-
-%new
-- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
-    [picker dismissViewControllerAnimated:YES completion:^{
-        UIView *overlay = objc_getAssociatedObject(self, kEditorOverlayKey);
-        overlay.hidden = NO;
-    }];
-
-    PHPickerResult *first = results.firstObject;
-    if (!first || ![first.itemProvider canLoadObjectOfClass:[UIImage class]]) return;
-
-    [first.itemProvider loadObjectOfClass:[UIImage class] completionHandler:^(__kindof id<NSItemProviderReading> object, NSError *error) {
-        if (![object isKindOfClass:[UIImage class]]) return;
-        UIImage *picked = (UIImage *)object;
-        UIImage *resized = iOS27ResizeImageForScreen(picked);
-        NSData *jpegData = UIImageJPEGRepresentation(resized, 0.85);
-        if (jpegData) {
-            [jpegData writeToFile:iOS27WallpaperFilePath() atomically:YES];
-            iOS27SetIntPref(@"kLSWallpaperMode", 1);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self ios27_applySavedWallpaper];
-            });
-        }
+        objc_setAssociatedObject(self, kMainBarKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, kIconsBarKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, kPhotoSheetKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }];
 }
 
 %new
 - (void)ios27_cycleWallpaperPreset {
     NSInteger current = iOS27IntPref(@"kLSWallpaperMode", 0);
-    NSInteger next = (current < 2 || current >= 5) ? 2 : (current + 1);
+    NSInteger maxMode = 2 + kIOS27ThemeCount - 1; // Modes 2..13 (12 themes)
+    NSInteger next = (current < 2 || current >= maxMode) ? 2 : (current + 1);
     iOS27SetIntPref(@"kLSWallpaperMode", next);
     [self ios27_applySavedWallpaper];
 }
@@ -426,7 +618,7 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 %new
 - (void)ios27_cycleClockColor {
     NSInteger current = iOS27IntPref(@"kLSClockColorIndex", 0);
-    NSInteger next = (current + 1) % 6;
+    NSInteger next = (current + 1) % 8;
     iOS27SetIntPref(@"kLSClockColorIndex", next);
     [[NSNotificationCenter defaultCenter] postNotificationName:kIOS27LSStyleChanged object:nil];
 }
@@ -444,9 +636,44 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 
 %end
 
+// Hook Settings App (com.apple.Preferences) -> Redirect "Wallpaper" to our iOS 27 Editor
+%group SettingsWallpaperRedirectHooks
+
+%hook PSUIPrefsListController
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    PSSpecifier *spec = [self respondsToSelector:@selector(specifierAtIndexPath:)] ? [self specifierAtIndexPath:indexPath] : nil;
+    NSString *ident = ([spec respondsToSelector:@selector(identifier)] && spec.identifier) ? [spec.identifier lowercaseString] : @"";
+    NSString *name = ([spec respondsToSelector:@selector(name)] && spec.name) ? [spec.name lowercaseString] : @"";
+
+    if ([ident isEqualToString:@"wallpaper"] || [name isEqualToString:@"wallpaper"]) {
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFSTR("com.elite.ios27.openWallpaperEditor"),
+                                             NULL, NULL, true);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%end
+
 %ctor {
-    if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableLockScreen", YES)) {
+    if (!iOS27BoolPref(@"kEnabled", YES) || !iOS27BoolPref(@"kEnableLockScreen", YES)) return;
+
+    NSString *bundleID = [NSBundle mainBundle].bundleIdentifier;
+    if ([bundleID isEqualToString:@"com.apple.springboard"]) {
         gEditorGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.28);
         %init(WallpaperEditorHooks);
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                        NULL,
+                                        DarwinOpenEditorCallback,
+                                        CFSTR("com.elite.ios27.openWallpaperEditor"),
+                                        NULL,
+                                        CFNotificationSuspensionBehaviorDeliverImmediately);
+    } else if ([bundleID isEqualToString:@"com.apple.Preferences"]) {
+        %init(SettingsWallpaperRedirectHooks);
     }
 }
