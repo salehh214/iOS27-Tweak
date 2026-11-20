@@ -2,9 +2,16 @@
 #import <QuartzCore/QuartzCore.h>
 #import <ImageIO/ImageIO.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import "iOS27Prefs.h"
 
 @interface SBHomeScreenButton : UIButton
+@end
+
+@interface SBHAddWidgetButton : UIButton
+@end
+
+@interface SBHTitledHomeScreenButton : UIButton
 @end
 
 @interface SBRootFolderView : UIView
@@ -12,6 +19,7 @@
 - (BOOL)isEditing;
 - (UIControl *)pageControl;
 - (void)ios27_updateEditOverlay:(BOOL)editing;
+- (void)ios27_hideStockTopButtonsInWindow:(UIWindow *)win;
 - (void)ios27_brushTapped;
 - (void)ios27_doneTapped;
 - (void)ios27_dismissMenu;
@@ -22,10 +30,6 @@
 @end
 
 @interface SBRootFolderController : UIViewController
-- (void)presentPageManagementAnimated:(BOOL)animated;
-- (void)setPageManagementMode:(BOOL)mode;
-- (void)folderViewDidTapPageControl:(id)folderView;
-- (void)enterPageManagementMode;
 @end
 
 @interface SBHIconManager : NSObject
@@ -38,7 +42,6 @@
 + (instancetype)sharedInstance;
 - (SBHIconManager *)iconManager;
 - (void)setEditing:(BOOL)editing;
-- (void)presentAddWidgetSheetFromViewController:(UIViewController *)vc;
 @end
 
 static __weak UIControl *gStockAddButton = nil;
@@ -76,14 +79,101 @@ static void ApplyHSEditorGlass(UIView *view, CGFloat radius, CGFloat alpha) {
 
 static void RefreshAllVisibleIconsInView(UIView *root) {
     if (!root) return;
-    if ([NSStringFromClass([root class]) isEqualToString:@"SBIconView"] ||
-        [NSStringFromClass([root class]) isEqualToString:@"SBIconListPageControl"]) {
+    NSString *cls = NSStringFromClass([root class]);
+    if ([cls isEqualToString:@"SBIconView"] || [cls isEqualToString:@"SBIconListPageControl"]) {
         [root setNeedsLayout];
         [root layoutIfNeeded];
         return;
     }
     for (UIView *sub in root.subviews) {
         RefreshAllVisibleIconsInView(sub);
+    }
+}
+
+// Safely fire every target-action registered on a hidden UIControl
+static BOOL FireControlActionsDirectly(UIControl *control) {
+    if (!control) return NO;
+    BOOL fired = NO;
+    UIControlEvents eventsToCheck[] = {
+        UIControlEventTouchUpInside,
+        UIControlEventPrimaryActionTriggered,
+        UIControlEventTouchDown
+    };
+
+    NSSet *targets = [control allTargets];
+    for (id target in targets) {
+        if (!target || target == [NSNull null]) continue;
+        for (int i = 0; i < 3; i++) {
+            NSArray<NSString *> *actions = [control actionsForTarget:target forControlEvent:eventsToCheck[i]];
+            for (NSString *actionName in actions) {
+                SEL sel = NSSelectorFromString(actionName);
+                if ([target respondsToSelector:sel]) {
+                    if ([actionName hasSuffix:@":"]) {
+                        ((void (*)(id, SEL, id))objc_msgSend)(target, sel, control);
+                    } else {
+                        ((void (*)(id, SEL))objc_msgSend)(target, sel);
+                    }
+                    fired = YES;
+                }
+            }
+            if (fired) return YES;
+        }
+    }
+
+    // Fallback: standard UIControl sendActions
+    BOOL prevEnabled = control.enabled;
+    control.enabled = YES;
+    [control sendActionsForControlEvents:UIControlEventTouchUpInside];
+    [control sendActionsForControlEvents:UIControlEventPrimaryActionTriggered];
+    control.enabled = prevEnabled;
+    return YES;
+}
+
+static UIControl *FindPageControlInView(UIView *root) {
+    if (!root) return nil;
+    if ([NSStringFromClass([root class]) containsString:@"PageControl"] && [root isKindOfClass:[UIControl class]]) {
+        return (UIControl *)root;
+    }
+    for (UIView *sub in root.subviews) {
+        UIControl *found = FindPageControlInView(sub);
+        if (found) return found;
+    }
+    return nil;
+}
+
+static void ScanAndHideStockButtons(UIView *view, UIWindow *win) {
+    if (!view || !win) return;
+    // Skip our own custom overlay views (tags 27500..27599)
+    if (view.tag >= 27500 && view.tag <= 27599) return;
+
+    NSString *cls = NSStringFromClass([view class]);
+    BOOL isCandidate = [view isKindOfClass:[UIControl class]] &&
+                       ([cls containsString:@"HomeScreenButton"] ||
+                        [cls containsString:@"AddWidget"] ||
+                        [cls containsString:@"PlusButton"] ||
+                        [cls containsString:@"DoneButton"] ||
+                        [view isKindOfClass:[UIButton class]]);
+
+    if (isCandidate) {
+        CGRect winRect = [view convertRect:view.bounds toView:win];
+        if (winRect.origin.y >= -4.0 && winRect.origin.y < 85.0 &&
+            winRect.size.width > 18.0 && winRect.size.width < 130.0 &&
+            winRect.size.height > 18.0 && winRect.size.height < 65.0) {
+
+            if (winRect.origin.x < win.bounds.size.width / 2.0) {
+                gStockAddButton = (UIControl *)view;
+            } else {
+                gStockDoneButton = (UIControl *)view;
+            }
+            view.alpha = 0.0;
+            view.hidden = YES;
+            view.userInteractionEnabled = NO;
+            return;
+        }
+    }
+
+    for (UIView *sub in view.subviews) {
+        ScanAndHideStockButtons(sub, win);
     }
 }
 
@@ -153,6 +243,7 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        self.tag = 27520;
         self.thumbCache = [[NSCache alloc] init];
         self.thumbCache.countLimit = 40;
         self.photoPaths = iOS27HSScanPhotos();
@@ -270,6 +361,7 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        self.tag = 27510;
         self.backgroundColor = [UIColor blackColor];
 
         self.draftMode = iOS27IntPref(@"kHSWallpaperMode", 0);
@@ -542,11 +634,11 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        self.tag = 27515;
         ApplyHSEditorGlass(self, 28.0, 0.84);
 
         CGFloat w = frame.size.width;
 
-        // Top Header: Sun (Dim Wallpaper) | Customize | Small/Large Toggle
         self.dimBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.dimBtn.frame = CGRectMake(12.0, 10.0, 32.0, 32.0);
         [self.dimBtn addTarget:self action:@selector(toggleDim) forControlEvents:UIControlEventTouchUpInside];
@@ -564,7 +656,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         [self.sizeBtn addTarget:self action:@selector(toggleSize) forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:self.sizeBtn];
 
-        // 4 Style Cards: Default, Dark, Clear, Tinted (Sized for 320px SE 2016)
         CGFloat pad = 10.0;
         CGFloat gap = 6.0;
         CGFloat cardW = floor((w - pad * 2.0 - gap * 3.0) / 4.0);
@@ -582,7 +673,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
             card.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
             [card addTarget:self action:@selector(styleCardTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-            // Mini preview icon inside card (matches Video 2 weather-cloud look)
             CGFloat iconS = MIN(cardW - 22.0, 42.0);
             UIView *miniIcon = [[UIView alloc] initWithFrame:CGRectMake((cardW - iconS) / 2.0, 10.0, iconS, iconS)];
             miniIcon.layer.cornerRadius = 10.0;
@@ -627,11 +717,9 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         }
         self.styleCards = cards;
 
-        // Tinted Sliders Container (Rainbow Hue + Brightness)
         self.slidersContainer = [[UIView alloc] initWithFrame:CGRectMake(14.0, 144.0, w - 28.0, 74.0)];
         self.slidersContainer.backgroundColor = [UIColor clearColor];
 
-        // Rainbow Hue Track
         UIView *hueTrack = [[UIView alloc] initWithFrame:CGRectMake(0, 6.0, w - 28.0, 18.0)];
         hueTrack.layer.cornerRadius = 9.0;
         hueTrack.clipsToBounds = YES;
@@ -661,7 +749,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         [self.hueSlider addTarget:self action:@selector(sliderChanged) forControlEvents:UIControlEventValueChanged];
         [self.slidersContainer addSubview:self.hueSlider];
 
-        // Brightness Track
         UIView *briTrack = [[UIView alloc] initWithFrame:CGRectMake(0, 44.0, w - 28.0, 18.0)];
         briTrack.layer.cornerRadius = 9.0;
         briTrack.clipsToBounds = YES;
@@ -683,7 +770,6 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 
         [self addSubview:self.slidersContainer];
 
-        // Bottom SubMode Segmented Control (Always/Auto or Light/Dark/Auto)
         self.subModeSeg = [[UISegmentedControl alloc] initWithItems:@[@"Light", @"Dark", @"Auto"]];
         self.subModeSeg.frame = CGRectMake(24.0, 148.0, w - 48.0, 32.0);
         [self.subModeSeg addTarget:self action:@selector(subModeChanged) forControlEvents:UIControlEventValueChanged];
@@ -698,7 +784,7 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
     NSInteger style = iOS27IntPref(@"kHSIconStyle", 0);
     if (style == 0) return 150.0;
     if (style == 1 || style == 2) return 194.0;
-    return 264.0; // Tinted with both sliders + Light/Dark/Auto
+    return 264.0;
 }
 
 - (void)syncUIState:(BOOL)animateResize {
@@ -724,11 +810,9 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
         c.backgroundColor = sel ? [UIColor colorWithWhite:1.0 alpha:0.20] : [UIColor colorWithWhite:1.0 alpha:0.06];
     }
 
-    // Update brightness slider gradient color
     UIColor *hueCol = [UIColor colorWithHue:self.hueSlider.value saturation:0.85 brightness:1.0 alpha:1.0];
     self.briTrackGrad.colors = @[(id)[UIColor whiteColor].CGColor, (id)hueCol.CGColor];
 
-    // Configure dynamic controls
     self.slidersContainer.hidden = (style != 3);
     self.subModeSeg.hidden = (style == 0);
 
@@ -792,33 +876,79 @@ static NSArray<NSString *> *iOS27HSScanPhotos(void) {
 @end
 
 // =========================================================================
-// 4. SpringBoard Home Screen Edit Mode Hooks (Exact Position Brush + Checkmark)
+// 4. SpringBoard Home Screen Edit Mode Hooks (Stock +/Done Locked Hidden + Working Actions)
 // =========================================================================
 static const void *kTopBarKey = &kTopBarKey;
 static const void *kMenuOverlayKey = &kMenuOverlayKey;
 static const void *kStudioViewKey = &kStudioViewKey;
 static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
 
-%group HomeScreenEditorHooks
-
-// Directly intercept stock iOS 15 '+' and 'Done' buttons so they NEVER appear behind Brush/Checkmark
-%hook SBHomeScreenButton
-
-- (void)layoutSubviews {
-    %orig;
-    if (!self.window) return;
-    CGRect winRect = [self convertRect:self.bounds toView:self.window];
-    if (winRect.origin.y >= 0 && winRect.origin.y < 90.0) {
-        if (winRect.origin.x < self.window.bounds.size.width / 2.0) {
-            gStockAddButton = self;
+static void HandleStockButtonHook(UIButton *btn) {
+    if (!btn.window) return;
+    if (btn.tag >= 27500 && btn.tag <= 27599) return;
+    CGRect winRect = [btn convertRect:btn.bounds toView:btn.window];
+    if (winRect.origin.y >= -4.0 && winRect.origin.y < 85.0) {
+        if (winRect.origin.x < btn.window.bounds.size.width / 2.0) {
+            gStockAddButton = btn;
         } else {
-            gStockDoneButton = self;
+            gStockDoneButton = btn;
         }
-        self.alpha = 0.0;
-        self.userInteractionEnabled = NO;
+        btn.userInteractionEnabled = NO;
     }
 }
 
+%group HomeScreenEditorHooks
+
+// Lock alpha=0 and hidden=YES on stock '+' and 'Done' button classes so SpringBoard animations cannot reveal them
+%hook SBHomeScreenButton
+- (void)setAlpha:(CGFloat)alpha {
+    HandleStockButtonHook(self);
+    %orig(0.0);
+}
+- (void)setHidden:(BOOL)hidden {
+    HandleStockButtonHook(self);
+    %orig(YES);
+}
+- (void)layoutSubviews {
+    %orig;
+    HandleStockButtonHook(self);
+    self.alpha = 0.0;
+    self.hidden = YES;
+}
+%end
+
+%hook SBHAddWidgetButton
+- (void)setAlpha:(CGFloat)alpha {
+    HandleStockButtonHook(self);
+    %orig(0.0);
+}
+- (void)setHidden:(BOOL)hidden {
+    HandleStockButtonHook(self);
+    %orig(YES);
+}
+- (void)layoutSubviews {
+    %orig;
+    HandleStockButtonHook(self);
+    self.alpha = 0.0;
+    self.hidden = YES;
+}
+%end
+
+%hook SBHTitledHomeScreenButton
+- (void)setAlpha:(CGFloat)alpha {
+    HandleStockButtonHook(self);
+    %orig(0.0);
+}
+- (void)setHidden:(BOOL)hidden {
+    HandleStockButtonHook(self);
+    %orig(YES);
+}
+- (void)layoutSubviews {
+    %orig;
+    HandleStockButtonHook(self);
+    self.alpha = 0.0;
+    self.hidden = YES;
+}
 %end
 
 %hook SBRootFolderView
@@ -826,14 +956,38 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated {
     %orig;
     [self ios27_updateEditOverlay:editing];
-    // Refresh PageControl so Search pill switches to dots while editing
     RefreshAllVisibleIconsInView(self);
+
+    if (editing && self.window) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf ios27_hideStockTopButtonsInWindow:weakSelf.window];
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf ios27_hideStockTopButtonsInWindow:weakSelf.window];
+        });
+    }
 }
 
 - (void)layoutSubviews {
     %orig;
     if ([self respondsToSelector:@selector(isEditing)] && [self isEditing]) {
         [self ios27_updateEditOverlay:YES];
+    }
+}
+
+%new
+- (void)ios27_hideStockTopButtonsInWindow:(UIWindow *)win {
+    if (!win) return;
+    ScanAndHideStockButtons(win, win);
+
+    // Align our Brush & Checkmark topBar to the exact Y position of stock '+' button
+    UIView *topBar = objc_getAssociatedObject(self, kTopBarKey);
+    if (topBar && gStockAddButton && gStockAddButton.window == win) {
+        CGRect r = [gStockAddButton convertRect:gStockAddButton.bounds toView:win];
+        if (r.origin.y >= 0.0 && r.origin.y < 80.0) {
+            topBar.frame = CGRectMake(0, r.origin.y, win.bounds.size.width, 32.0);
+        }
     }
 }
 
@@ -856,23 +1010,25 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
         return;
     }
 
+    [self ios27_hideStockTopButtonsInWindow:win];
+
     CGFloat w = win.bounds.size.width;
-    // Match exact stock '+' button Y position (top of screen on iPhone SE 2016)
     CGFloat topY = (win.bounds.size.height > 600.0) ? 44.0 : 4.0;
     if (gStockAddButton && gStockAddButton.window == win) {
         CGRect r = [gStockAddButton convertRect:gStockAddButton.bounds toView:win];
-        if (r.origin.y >= 0 && r.origin.y < 80.0) {
+        if (r.origin.y >= 0.0 && r.origin.y < 80.0) {
             topY = r.origin.y;
         }
     }
 
     if (!topBar) {
         topBar = [[UIView alloc] initWithFrame:CGRectMake(0, topY, w, 32.0)];
+        topBar.tag = 27500;
         topBar.backgroundColor = [UIColor clearColor];
         topBar.alpha = 0.0;
 
-        // Top-Left Glass Brush Pill (Replaces stock '+' at exact position)
         UIButton *brushBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        brushBtn.tag = 27501;
         brushBtn.frame = CGRectMake(12.0, 0.0, 52.0, 28.0);
         if (@available(iOS 13.0, *)) {
             UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14.0 weight:UIImageSymbolWeightSemibold];
@@ -883,8 +1039,8 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
         [brushBtn addTarget:self action:@selector(ios27_brushTapped) forControlEvents:UIControlEventTouchUpInside];
         [topBar addSubview:brushBtn];
 
-        // Top-Right Glass Checkmark Pill (Replaces stock 'Done' at exact position)
         UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        doneBtn.tag = 27502;
         doneBtn.frame = CGRectMake(w - 64.0, 0.0, 52.0, 28.0);
         if (@available(iOS 13.0, *)) {
             UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14.5 weight:UIImageSymbolWeightBold];
@@ -922,6 +1078,7 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
     [haptic impactOccurred];
 
     UIView *backdrop = [[UIView alloc] initWithFrame:win.bounds];
+    backdrop.tag = 27505;
     backdrop.backgroundColor = [UIColor clearColor];
     UITapGestureRecognizer *dismissTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(ios27_dismissMenu)];
     [backdrop addGestureRecognizer:dismissTap];
@@ -936,6 +1093,7 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
     CGFloat menuH = rowH * 4.0 + 10.0;
 
     UIView *menuBox = [[UIView alloc] initWithFrame:CGRectMake(12.0, menuY, menuW, menuH)];
+    menuBox.tag = 27506;
     ApplyHSEditorGlass(menuBox, 20.0, 0.82);
     menuBox.transform = CGAffineTransformMakeScale(0.86, 0.86);
     menuBox.alpha = 0.0;
@@ -997,7 +1155,7 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
 - (void)ios27_doneTapped {
     [self ios27_dismissMenu];
     if (gStockDoneButton) {
-        [gStockDoneButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        FireControlActionsDirectly(gStockDoneButton);
     }
     SBIconController *ic = [%c(SBIconController) sharedInstance];
     if ([ic respondsToSelector:@selector(iconManager)]) {
@@ -1014,13 +1172,28 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
 %new
 - (void)ios27_menuAddWidget {
     [self ios27_dismissMenu];
-    if (gStockAddButton) {
-        [gStockAddButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+    if (!gStockAddButton && self.window) {
+        ScanAndHideStockButtons(self.window, self.window);
+    }
+
+    // 1. Direct target-action invocation on stock '+' button (Most reliable on iOS 15)
+    if (gStockAddButton && FireControlActionsDirectly(gStockAddButton)) {
         return;
     }
+
+    // 2. Fallbacks on SBIconController & SBHIconManager
     SBIconController *ic = [%c(SBIconController) sharedInstance];
-    if ([ic respondsToSelector:@selector(presentAddWidgetSheetFromViewController:)]) {
-        [ic presentAddWidgetSheetFromViewController:ic];
+    NSArray *sels = @[@"presentAddWidgetSheetFromViewController:", @"_presentAddWidgetSheetFromViewController:", @"addWidgetButtonTapped:", @"_addWidgetButtonTapped:", @"presentAddWidgetSheet"];
+    for (NSString *s in sels) {
+        SEL sel = NSSelectorFromString(s);
+        if ([ic respondsToSelector:sel]) {
+            if ([s hasSuffix:@":"]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(ic, sel, ic);
+            } else {
+                ((void (*)(id, SEL))objc_msgSend)(ic, sel);
+            }
+            return;
+        }
     }
 }
 
@@ -1037,9 +1210,9 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
     CGFloat h = win.bounds.size.height;
 
     UIView *overlay = [[UIView alloc] initWithFrame:win.bounds];
+    overlay.tag = 27514;
     overlay.backgroundColor = [UIColor clearColor];
 
-    // Transparent tap area above sheet to dismiss cleanly
     UIButton *dismissArea = [UIButton buttonWithType:UIButtonTypeCustom];
     dismissArea.frame = win.bounds;
     [overlay addSubview:dismissArea];
@@ -1120,37 +1293,64 @@ static const void *kCustomizeOverlayKey = &kCustomizeOverlayKey;
 - (void)ios27_menuEditPages {
     [self ios27_dismissMenu];
 
-    SBIconController *ic = [%c(SBIconController) sharedInstance];
-    SBHIconManager *mgr = [ic respondsToSelector:@selector(iconManager)] ? [ic iconManager] : nil;
-    SBRootFolderController *rfc = [mgr respondsToSelector:@selector(rootFolderController)] ? [mgr rootFolderController] : nil;
-
-    // 1. Primary iOS 15 trigger: native page control tap while editing
-    if ([self respondsToSelector:@selector(pageControl)]) {
-        UIControl *pc = [self pageControl];
-        if ([pc isKindOfClass:[UIControl class]]) {
-            [pc sendActionsForControlEvents:UIControlEventTouchUpInside];
+    // 1. Primary iOS 15 trigger: PageControl delegate tap method (exact same as tapping page dots in jiggle mode)
+    UIControl *pc = [self respondsToSelector:@selector(pageControl)] ? [self pageControl] : FindPageControlInView(self);
+    SEL delegateTapSel = NSSelectorFromString(@"pageControlDidReceiveButtonTap:");
+    if (pc) {
+        if ([pc respondsToSelector:@selector(delegate)]) {
+            id del = ((id (*)(id, SEL))objc_msgSend)(pc, @selector(delegate));
+            if (del && [del respondsToSelector:delegateTapSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(del, delegateTapSel, pc);
+                return;
+            }
+        }
+        if ([self respondsToSelector:delegateTapSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(self, delegateTapSel, pc);
             return;
         }
     }
 
-    // 2. Fallback selectors on SBRootFolderController
+    // 2. Fallback: SBRootFolderController page management selectors
+    SBIconController *ic = [%c(SBIconController) sharedInstance];
+    SBHIconManager *mgr = [ic respondsToSelector:@selector(iconManager)] ? [ic iconManager] : nil;
+    SBRootFolderController *rfc = [mgr respondsToSelector:@selector(rootFolderController)] ? [mgr rootFolderController] : nil;
+
     if (rfc) {
-        if ([rfc respondsToSelector:@selector(folderViewDidTapPageControl:)]) {
-            [rfc folderViewDidTapPageControl:self];
+        SEL s1 = NSSelectorFromString(@"presentPageManagementAnimated:completion:");
+        if ([rfc respondsToSelector:s1]) {
+            ((void (*)(id, SEL, BOOL, id))objc_msgSend)(rfc, s1, YES, nil);
             return;
         }
-        if ([rfc respondsToSelector:@selector(enterPageManagementMode)]) {
-            [rfc enterPageManagementMode];
+        SEL s2 = NSSelectorFromString(@"enterPageManagement");
+        if ([rfc respondsToSelector:s2]) {
+            ((void (*)(id, SEL))objc_msgSend)(rfc, s2);
             return;
         }
-        if ([rfc respondsToSelector:@selector(presentPageManagementAnimated:)]) {
-            [rfc presentPageManagementAnimated:YES];
+        SEL s3 = NSSelectorFromString(@"enterPageManagementAnimated:");
+        if ([rfc respondsToSelector:s3]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(rfc, s3, YES);
             return;
         }
-        if ([rfc respondsToSelector:@selector(setPageManagementMode:)]) {
-            [rfc setPageManagementMode:YES];
+        SEL s4 = NSSelectorFromString(@"presentPageManagementAnimated:");
+        if ([rfc respondsToSelector:s4]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(rfc, s4, YES);
             return;
         }
+        SEL s5 = NSSelectorFromString(@"setPageManagementMode:");
+        if ([rfc respondsToSelector:s5]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(rfc, s5, YES);
+            return;
+        }
+        SEL s6 = NSSelectorFromString(@"rootFolderViewDidReceivePageControlTap:");
+        if ([rfc respondsToSelector:s6]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(rfc, s6, self);
+            return;
+        }
+    }
+
+    // 3. Final fallback: fire control actions on pageControl
+    if (pc) {
+        FireControlActionsDirectly(pc);
     }
 }
 
