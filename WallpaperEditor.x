@@ -141,7 +141,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     UIView *v = touch.view;
     while (v && v != self.view) {
-        // Ignore taps on buttons, sliders, or notification cells
         if ([v isKindOfClass:[UIControl class]] ||
             [NSStringFromClass([v class]) containsString:@"Notification"] ||
             [NSStringFromClass([v class]) containsString:@"Platter"]) {
@@ -171,7 +170,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     UIImageView *wpView = (UIImageView *)[self.view viewWithTag:27300];
     if (!wpView) return;
 
-    // Remove old preset gradient if any
     for (CALayer *sub in [wpView.layer.sublayers copy]) {
         if ([sub.name isEqualToString:@"iOS27PresetGradient"]) {
             [sub removeFromSuperlayer];
@@ -262,11 +260,9 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     UIWindow *hostWindow = self.view.window;
     if (!hostWindow) return;
 
-    // Remove existing overlay if any
     UIView *oldOverlay = objc_getAssociatedObject(self, kEditorOverlayKey);
     if (oldOverlay) [oldOverlay removeFromSuperview];
 
-    // Transparent HUD container on window so controls stay full-size while Lock Screen zooms out
     UIView *overlay = [[UIView alloc] initWithFrame:hostWindow.bounds];
     overlay.backgroundColor = [UIColor clearColor];
     overlay.alpha = 0.0;
@@ -276,7 +272,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     CGFloat w = hostWindow.bounds.size.width;
     CGFloat h = hostWindow.bounds.size.height;
 
-    // Top Header: Title + Done + Reset
     UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     doneBtn.frame = CGRectMake(w - 86.0, 34.0, 72.0, 32.0);
     [doneBtn setTitle:@"Done" forState:UIControlStateNormal];
@@ -295,7 +290,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     [resetBtn addTarget:self action:@selector(ios27_resetWallpaper) forControlEvents:UIControlEventTouchUpInside];
     [overlay addSubview:resetBtn];
 
-    // Bottom Glassy Customization Dock
     CGFloat dockH = 54.0;
     CGFloat dockW = MIN(w - 24.0, 340.0);
     UIView *dock = [[UIView alloc] initWithFrame:CGRectMake((w - dockW) / 2.0, h - dockH - 22.0, dockW, dockH)];
@@ -314,7 +308,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
     [stack addArrangedSubview:CreateEditorButton(@"paintpalette", @"Color", self, @selector(ios27_cycleClockColor))];
     [dock addSubview:stack];
 
-    // Zoom-Out Card Animation on CoverSheet View
     self.view.clipsToBounds = YES;
     [UIView animateWithDuration:0.32
                           delay:0.0
@@ -352,7 +345,6 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 %new
 - (void)ios27_openPhotoPicker {
     if (@available(iOS 14.0, *)) {
-        // Temporarily hide overlay so picker isn't covered
         UIView *overlay = objc_getAssociatedObject(self, kEditorOverlayKey);
         overlay.hidden = YES;
 
@@ -368,7 +360,7 @@ static const void *kEditorOverlayKey = &kEditorOverlayKey;
 }
 
 %new
-- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results API_AVAILABLE(ios(14.0)) {
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
     [picker dismissViewControllerAnimated:YES completion:^{
         UIView *overlay = objc_getAssociatedObject(self, kEditorOverlayKey);
         overlay.hidden = NO;
