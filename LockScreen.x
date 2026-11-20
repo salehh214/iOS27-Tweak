@@ -14,6 +14,8 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 @interface SBUILegibilityLabel : UIView
 @property (nonatomic, strong) UIFont *font;
 @property (nonatomic, strong) UIColor *textColor;
+@property (nonatomic, copy) NSAttributedString *attributedText;
+@property (nonatomic, assign) double strength;
 @property (nonatomic, strong) _UILegibilitySettings *legibilitySettings;
 - (void)_updateLegibilityView;
 @end
@@ -23,6 +25,7 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 - (void)ios27_applyClockStyle;
 - (void)_updateLabels;
 - (void)setLegibilitySettings:(id)settings;
+- (void)setTextColor:(UIColor *)color;
 @end
 
 @interface CSQuickActionsButton : UIControl
@@ -40,41 +43,6 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 - (void)removeNotificationRequest:(id)request;
 - (void)clearAllNotificationRequests;
 @end
-
-static UIFont *iOS27ClockFontForIndex(NSInteger idx) {
-    UIFontDescriptor *base = [UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy].fontDescriptor;
-    switch (idx) {
-        case 1:
-            return [UIFont systemFontOfSize:78.0 weight:UIFontWeightBold];
-        case 2: {
-            UIFontDescriptor *serif = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignSerif];
-            return serif ? [UIFont fontWithDescriptor:serif size:78.0] : [UIFont fontWithName:@"Georgia-Bold" size:74.0];
-        }
-        case 3: {
-            UIFontDescriptor *mono = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignMonospaced];
-            return mono ? [UIFont fontWithDescriptor:mono size:70.0] : [UIFont monospacedDigitSystemFontOfSize:72.0 weight:UIFontWeightBold];
-        }
-        case 4:
-            return [UIFont systemFontOfSize:82.0 weight:UIFontWeightUltraLight];
-        default: {
-            UIFontDescriptor *rounded = [base fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
-            return rounded ? [UIFont fontWithDescriptor:rounded size:78.0] : [UIFont systemFontOfSize:78.0 weight:UIFontWeightHeavy];
-        }
-    }
-}
-
-static UIColor *iOS27ClockColorForIndex(NSInteger idx) {
-    switch (idx) {
-        case 1: return [UIColor colorWithWhite:1.0 alpha:0.98];                                // Pure White
-        case 2: return [UIColor colorWithRed:0.55 green:1.00 blue:0.80 alpha:0.96];             // Neon Mint
-        case 3: return [UIColor colorWithRed:1.00 green:0.84 blue:0.42 alpha:0.96];             // Sunset Gold
-        case 4: return [UIColor colorWithRed:1.00 green:0.68 blue:0.80 alpha:0.96];             // Soft Rose
-        case 5: return [UIColor colorWithRed:0.80 green:0.70 blue:1.00 alpha:0.96];             // Lavender
-        case 6: return [UIColor colorWithRed:1.00 green:0.52 blue:0.32 alpha:0.96];             // Vibrant Orange
-        case 7: return [UIColor colorWithRed:0.35 green:0.82 blue:1.00 alpha:0.96];             // Electric Blue
-        default: return [UIColor colorWithRed:0.88 green:0.96 blue:1.00 alpha:0.96];            // Ice Cyan
-    }
-}
 
 static void ApplyLSGlassySheen(UIView *view, CGFloat radius, CGFloat alpha) {
     view.backgroundColor = [UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:alpha];
@@ -119,6 +87,44 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 }
 
 %group LockScreenHooks
+
+// Intercept SBUILegibilityLabel specifically for our tagged Lock Screen Clock (tag 27999)
+%hook SBUILegibilityLabel
+
+- (void)setFont:(UIFont *)font {
+    if (self.tag == 27999) {
+        NSDictionary *profile = iOS27ActiveWallpaperProfile();
+        %orig(iOS27ClockFontForIndex([profile[@"fontIndex"] integerValue], 78.0));
+        return;
+    }
+    %orig;
+}
+
+- (void)setTextColor:(UIColor *)color {
+    if (self.tag == 27999) {
+        NSDictionary *profile = iOS27ActiveWallpaperProfile();
+        %orig(iOS27ClockColorForIndex([profile[@"colorIndex"] integerValue]));
+        return;
+    }
+    %orig;
+}
+
+- (void)setAttributedText:(NSAttributedString *)attributedText {
+    if (self.tag == 27999 && attributedText.length > 0) {
+        NSDictionary *profile = iOS27ActiveWallpaperProfile();
+        UIFont *f = iOS27ClockFontForIndex([profile[@"fontIndex"] integerValue], 78.0);
+        UIColor *c = iOS27ClockColorForIndex([profile[@"colorIndex"] integerValue]);
+        NSMutableAttributedString *mut = [attributedText mutableCopy];
+        NSRange full = NSMakeRange(0, mut.length);
+        [mut addAttribute:NSFontAttributeName value:f range:full];
+        [mut addAttribute:NSForegroundColorAttributeName value:c range:full];
+        %orig(mut);
+        return;
+    }
+    %orig;
+}
+
+%end
 
 %hook NCNotificationStructuredListViewController
 - (void)insertNotificationRequest:(id)request {
@@ -242,48 +248,58 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
 %new
 - (void)ios27_applyClockStyle {
-    id timeLabel = nil;
+    UIView *timeLabel = nil;
     @try {
         timeLabel = [self valueForKey:@"_timeLabel"];
     } @catch (NSException *e) {}
     if (!timeLabel) return;
 
-    NSInteger fontIdx = iOS27IntPref(@"kLSClockFontIndex", 0);
-    NSInteger colorIdx = iOS27IntPref(@"kLSClockColorIndex", 0);
-    UIFont *targetFont = iOS27ClockFontForIndex(fontIdx);
-    UIColor *targetColor = iOS27ClockColorForIndex(colorIdx);
+    timeLabel.tag = 27999;
 
-    if ([timeLabel respondsToSelector:@selector(setFont:)]) {
-        [timeLabel setFont:targetFont];
+    NSDictionary *profile = iOS27ActiveWallpaperProfile();
+    UIFont *targetFont = iOS27ClockFontForIndex([profile[@"fontIndex"] integerValue], 78.0);
+    UIColor *targetColor = iOS27ClockColorForIndex([profile[@"colorIndex"] integerValue]);
+
+    SBUILegibilityLabel *legLabel = (SBUILegibilityLabel *)timeLabel;
+
+    // Disable heavy shadow bitmap cache so crisp UILabel updates color & font instantly
+    if ([legLabel respondsToSelector:@selector(setStrength:)]) {
+        legLabel.strength = 0.0;
     }
-    if ([timeLabel respondsToSelector:@selector(setTextColor:)]) {
-        [timeLabel setTextColor:targetColor];
+
+    if ([legLabel respondsToSelector:@selector(setFont:)]) {
+        legLabel.font = targetFont;
+    }
+    if ([legLabel respondsToSelector:@selector(setTextColor:)]) {
+        legLabel.textColor = targetColor;
+    }
+
+    if ([legLabel respondsToSelector:@selector(attributedText)] && legLabel.attributedText.length > 0) {
+        legLabel.attributedText = legLabel.attributedText; // Triggers our hook above
     }
 
     Class legClass = NSClassFromString(@"_UILegibilitySettings");
-    if (legClass && [timeLabel respondsToSelector:@selector(setLegibilitySettings:)]) {
+    if (legClass && [legLabel respondsToSelector:@selector(setLegibilitySettings:)]) {
         id legSettings = [[legClass alloc] initWithStyle:1
                                             primaryColor:targetColor
                                           secondaryColor:targetColor
-                                             shadowColor:[UIColor colorWithWhite:0.0 alpha:0.25]];
-        [timeLabel setLegibilitySettings:legSettings];
+                                             shadowColor:[UIColor clearColor]];
+        legLabel.legibilitySettings = legSettings;
     }
 
     @try {
-        UILabel *lookaside = [timeLabel valueForKey:@"_lookasideLabel"];
+        UILabel *lookaside = [legLabel valueForKey:@"_lookasideLabel"];
         if ([lookaside isKindOfClass:[UILabel class]]) {
             lookaside.font = targetFont;
             lookaside.textColor = targetColor;
         }
     } @catch (NSException *e) {}
 
-    if ([timeLabel respondsToSelector:@selector(_updateLegibilityView)]) {
-        [timeLabel _updateLegibilityView];
+    if ([legLabel respondsToSelector:@selector(_updateLegibilityView)]) {
+        [legLabel _updateLegibilityView];
     }
-    if ([timeLabel isKindOfClass:[UIView class]]) {
-        [(UIView *)timeLabel setNeedsLayout];
-        [(UIView *)timeLabel layoutIfNeeded];
-    }
+    [timeLabel setNeedsLayout];
+    [timeLabel layoutIfNeeded];
 }
 
 %new
