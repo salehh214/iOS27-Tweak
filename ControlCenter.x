@@ -59,6 +59,7 @@ static void ApplyCCGlassStyle(UIView *view, CGFloat radius) {
 %end
 
 %ctor {
+    if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
     if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableCC", YES)) {
         gCCGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.28);
         %init(ControlCenterHooks);
