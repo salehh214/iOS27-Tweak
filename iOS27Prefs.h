@@ -8,7 +8,6 @@
 #define kIOS27LSStyleChanged @"iOS27LSStyleDidChange"
 #define kIOS27WallpaperChanged @"iOS27WallpaperDidChange"
 #define kIOS27HSStyleChanged @"iOS27HSStyleDidChange"
-#define kIOS27HSEditingChanged @"iOS27HSEditingDidChange"
 #define kIOS27ThemeCount 12
 #define kIOS27HSColorCount 10
 
@@ -28,6 +27,12 @@ static inline CGFloat iOS27FloatPref(NSString *key, CGFloat defaultValue) {
     NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
     id val = [prefs objectForKey:key];
     return val ? (CGFloat)[val doubleValue] : defaultValue;
+}
+
+static inline void iOS27SetFloatPref(NSString *key, CGFloat value) {
+    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    [prefs setDouble:(double)value forKey:key];
+    [prefs synchronize];
 }
 
 static inline NSInteger iOS27IntPref(NSString *key, NSInteger defaultValue) {
@@ -145,16 +150,16 @@ static inline UIColor *iOS27ClockColorForIndex(NSInteger idx) {
 
 static inline UIColor *iOS27HSSolidColorForIndex(NSInteger idx) {
     switch (idx % kIOS27HSColorCount) {
-        case 0: return [UIColor colorWithRed:0.05 green:0.06 blue:0.09 alpha:1.0]; // Midnight Black
-        case 1: return [UIColor colorWithRed:0.07 green:0.16 blue:0.30 alpha:1.0]; // Deep Navy
-        case 2: return [UIColor colorWithRed:0.06 green:0.24 blue:0.22 alpha:1.0]; // Forest Teal
-        case 3: return [UIColor colorWithRed:0.22 green:0.09 blue:0.30 alpha:1.0]; // Royal Plum
-        case 4: return [UIColor colorWithRed:0.32 green:0.10 blue:0.14 alpha:1.0]; // Burgundy
-        case 5: return [UIColor colorWithRed:0.14 green:0.15 blue:0.18 alpha:1.0]; // Space Gray
-        case 6: return [UIColor colorWithRed:0.09 green:0.28 blue:0.46 alpha:1.0]; // Ocean Blue
-        case 7: return [UIColor colorWithRed:0.28 green:0.22 blue:0.14 alpha:1.0]; // Warm Bronze
-        case 8: return [UIColor colorWithRed:0.12 green:0.22 blue:0.16 alpha:1.0]; // Pine Dark
-        default: return [UIColor colorWithRed:0.02 green:0.02 blue:0.03 alpha:1.0]; // Pure OLED
+        case 0: return [UIColor colorWithRed:0.05 green:0.06 blue:0.09 alpha:1.0];
+        case 1: return [UIColor colorWithRed:0.07 green:0.16 blue:0.30 alpha:1.0];
+        case 2: return [UIColor colorWithRed:0.06 green:0.24 blue:0.22 alpha:1.0];
+        case 3: return [UIColor colorWithRed:0.22 green:0.09 blue:0.30 alpha:1.0];
+        case 4: return [UIColor colorWithRed:0.32 green:0.10 blue:0.14 alpha:1.0];
+        case 5: return [UIColor colorWithRed:0.14 green:0.15 blue:0.18 alpha:1.0];
+        case 6: return [UIColor colorWithRed:0.09 green:0.28 blue:0.46 alpha:1.0];
+        case 7: return [UIColor colorWithRed:0.28 green:0.22 blue:0.14 alpha:1.0];
+        case 8: return [UIColor colorWithRed:0.12 green:0.22 blue:0.16 alpha:1.0];
+        default: return [UIColor colorWithRed:0.02 green:0.02 blue:0.03 alpha:1.0];
     }
 }
 
@@ -278,8 +283,8 @@ static inline void iOS27ApplyWallpaperToView(UIImageView *wpView) {
     iOS27ApplyProfileToImageView(iOS27ActiveWallpaperProfile(), wpView, NO);
 }
 
-// Home Screen Independent Wallpaper Engine (Pair / Color / Gradient / Photo + Lightweight Fake-Blur Veil)
-static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger hsMode, NSInteger colorIdx, NSInteger gradIdx, BOOL blurOn, BOOL isPreview) {
+// Home Screen Independent Wallpaper Engine (Pair / Color / Gradient / Photo + Fake-Blur + Dimming)
+static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger hsMode, NSInteger colorIdx, NSInteger gradIdx, BOOL blurOn, BOOL dimOn, BOOL isPreview) {
     if (!wpView) return;
 
     for (CALayer *sub in [wpView.layer.sublayers copy]) {
@@ -289,15 +294,12 @@ static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger 
     }
 
     if (hsMode == 0) {
-        // Pair with Lock Screen
         iOS27ApplyProfileToImageView(iOS27ActiveWallpaperProfile(), wpView, isPreview);
     } else if (hsMode == 1) {
-        // Solid Color
         wpView.image = nil;
         wpView.hidden = NO;
         wpView.backgroundColor = iOS27HSSolidColorForIndex(colorIdx);
     } else if (hsMode == 2) {
-        // Gradient
         wpView.image = nil;
         wpView.hidden = NO;
         CAGradientLayer *grad = [CAGradientLayer layer];
@@ -308,7 +310,6 @@ static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger 
         grad.colors = iOS27GradientColorsForTheme(gradIdx);
         [wpView.layer insertSublayer:grad atIndex:0];
     } else if (hsMode == 3) {
-        // Custom Home Photo
         UIImage *img = [UIImage imageWithContentsOfFile:iOS27HomePhotoPath()];
         if (img) {
             wpView.image = img;
@@ -318,9 +319,10 @@ static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger 
         }
     }
 
-    // Zero-Lag Fake Blur Overlay (No UIVisualEffectView)
+    // Zero-Lag Fake Blur + Dimming Veil
     UIView *frost = [wpView viewWithTag:27399];
-    if (blurOn && !wpView.hidden) {
+    BOOL needOverlay = (blurOn || dimOn) && !wpView.hidden;
+    if (needOverlay) {
         if (!frost) {
             frost = [[UIView alloc] initWithFrame:wpView.bounds];
             frost.tag = 27399;
@@ -329,7 +331,10 @@ static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger 
             [wpView addSubview:frost];
         }
         frost.frame = wpView.bounds;
-        frost.backgroundColor = [UIColor colorWithRed:0.08 green:0.10 blue:0.15 alpha:0.46];
+        CGFloat alpha = 0.0;
+        if (blurOn) alpha += 0.42;
+        if (dimOn) alpha += 0.30;
+        frost.backgroundColor = [UIColor colorWithRed:0.06 green:0.08 blue:0.12 alpha:MIN(alpha, 0.72)];
         frost.hidden = NO;
     } else if (frost) {
         frost.hidden = YES;
