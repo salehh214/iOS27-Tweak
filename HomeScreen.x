@@ -41,6 +41,7 @@ static CGFloat gGlassAlpha = 0.25;
 @end
 
 @interface SBHIconManager : NSObject
+- (BOOL)isEditing;
 - (SBRootFolderController *)rootFolderController;
 - (SBSearchPresenter *)searchPresenter;
 @end
@@ -147,7 +148,8 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     NSInteger colorIdx = iOS27IntPref(@"kHSColorIndex", 0);
     NSInteger gradIdx = iOS27IntPref(@"kHSGradientIndex", 0);
     BOOL blurOn = iOS27BoolPref(@"kHSBlurEnabled", NO);
-    iOS27ApplyHomeWallpaperToView(wpView, hsMode, colorIdx, gradIdx, blurOn, NO);
+    BOOL dimOn = iOS27BoolPref(@"kHSDimWallpaper", NO);
+    iOS27ApplyHomeWallpaperToView(wpView, hsMode, colorIdx, gradIdx, blurOn, dimOn, NO);
 }
 
 %end
@@ -155,44 +157,84 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    BOOL hideLabels = iOS27BoolPref(@"kHSHideLabels", YES);
-    %orig(hideLabels ? YES : hidden);
+    // Large Icons mode hides labels automatically; Small mode respects system labels
+    BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", YES);
+    %orig(largeIcons ? YES : hidden);
 }
 
 - (void)layoutSubviews {
     %orig;
-    BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", NO);
-    CGFloat scale = largeIcons ? 1.04 : 0.94;
+
+    BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", YES);
+    CGFloat scale = largeIcons ? 1.06 : 0.94;
     self.transform = CGAffineTransformMakeScale(scale, scale);
 
-    // Lightweight Icon Appearance Style (0 = Default, 1 = Dark, 2 = Tinted)
+    // Ensure label visibility updates live when toggling Small / Large
+    @try {
+        UIView *labelView = [self valueForKey:@"_labelView"];
+        if ([labelView isKindOfClass:[UIView class]]) {
+            labelView.hidden = largeIcons;
+            labelView.alpha = largeIcons ? 0.0 : 1.0;
+        }
+    } @catch (NSException *e) {}
+
+    // Icon Appearance Engine: 0 = Default, 1 = Dark, 2 = Clear, 3 = Tinted
     NSInteger iconStyle = iOS27IntPref(@"kHSIconStyle", 0);
+    NSInteger subMode = iOS27IntPref(@"kHSIconSubMode", 0); // 0=Light/Always, 1=Dark/Auto, 2=Auto
+    CGFloat tintHue = iOS27FloatPref(@"kHSTintHue", 0.55);
+    CGFloat tintBri = iOS27FloatPref(@"kHSTintBrightness", 0.85);
+
     UIView *iconImgView = nil;
     @try {
         iconImgView = [self valueForKey:@"_iconImageView"];
     } @catch (NSException *e) {}
 
     if ([iconImgView isKindOfClass:[UIView class]]) {
-        UIView *tintVeil = [iconImgView viewWithTag:27888];
+        UIView *styleVeil = [iconImgView viewWithTag:27888];
+
         if (iconStyle == 0) {
-            if (tintVeil) tintVeil.hidden = YES;
+            // Default
+            iconImgView.alpha = 1.0;
+            iconImgView.layer.borderWidth = 0.0;
+            if (styleVeil) styleVeil.hidden = YES;
         } else {
-            if (!tintVeil) {
-                tintVeil = [[UIView alloc] initWithFrame:iconImgView.bounds];
-                tintVeil.tag = 27888;
-                tintVeil.userInteractionEnabled = NO;
-                tintVeil.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                tintVeil.layer.cornerRadius = 13.0;
-                tintVeil.layer.cornerCurve = kCACornerCurveContinuous;
-                tintVeil.clipsToBounds = YES;
-                [iconImgView addSubview:tintVeil];
+            if (!styleVeil) {
+                styleVeil = [[UIView alloc] initWithFrame:iconImgView.bounds];
+                styleVeil.tag = 27888;
+                styleVeil.userInteractionEnabled = NO;
+                styleVeil.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                styleVeil.layer.cornerRadius = 13.0;
+                styleVeil.layer.cornerCurve = kCACornerCurveContinuous;
+                styleVeil.clipsToBounds = YES;
+                [iconImgView addSubview:styleVeil];
             }
-            tintVeil.frame = iconImgView.bounds;
-            tintVeil.hidden = NO;
+            styleVeil.frame = iconImgView.bounds;
+            styleVeil.hidden = NO;
+
             if (iconStyle == 1) {
-                tintVeil.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.28];
+                // Dark Mode Icons
+                iconImgView.alpha = 1.0;
+                styleVeil.backgroundColor = [UIColor colorWithWhite:0.0 alpha:(subMode == 0 ? 0.36 : 0.24)];
+                styleVeil.layer.borderWidth = 0.8;
+                styleVeil.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.18].CGColor;
+            } else if (iconStyle == 2) {
+                // Clear Glass Icons (Light / Dark / Auto)
+                iconImgView.alpha = 0.78;
+                if (subMode == 1) {
+                    styleVeil.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.45];
+                    styleVeil.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.35].CGColor;
+                } else {
+                    styleVeil.backgroundColor = [UIColor colorWithWhite:0.95 alpha:0.34];
+                    styleVeil.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.65].CGColor;
+                }
+                styleVeil.layer.borderWidth = 1.1;
             } else {
-                tintVeil.backgroundColor = [UIColor colorWithRed:0.15 green:0.55 blue:0.95 alpha:0.30];
+                // Tinted Icons (Live Rainbow Hue + Brightness)
+                iconImgView.alpha = 0.92;
+                UIColor *tintColor = [UIColor colorWithHue:tintHue saturation:0.82 brightness:tintBri alpha:0.52];
+                styleVeil.backgroundColor = tintColor;
+                styleVeil.layer.borderWidth = 1.0;
+                styleVeil.layer.borderColor = [UIColor colorWithHue:tintHue saturation:0.65 brightness:MIN(tintBri + 0.15, 1.0) alpha:0.75].CGColor;
             }
         }
     }
@@ -251,6 +293,24 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 - (void)layoutSubviews {
     %orig;
 
+    SBIconController *ic = [%c(SBIconController) sharedInstance];
+    SBHIconManager *mgr = [ic respondsToSelector:@selector(iconManager)] ? [ic iconManager] : nil;
+    BOOL isEditing = (mgr && [mgr respondsToSelector:@selector(isEditing)]) ? [mgr isEditing] : NO;
+
+    UIButton *searchPill = (UIButton *)[self viewWithTag:27005];
+
+    if (isEditing) {
+        // Edit mode me dots show karein (exact iOS 27 behavior)
+        if (searchPill) searchPill.hidden = YES;
+        for (UIView *sub in self.subviews) {
+            if (sub.tag != 27005) {
+                sub.hidden = NO;
+                sub.alpha = 1.0;
+            }
+        }
+        return;
+    }
+
     for (UIView *sub in self.subviews) {
         if (sub.tag != 27005) {
             sub.hidden = YES;
@@ -260,7 +320,6 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
 
     self.userInteractionEnabled = YES;
 
-    UIButton *searchPill = (UIButton *)[self viewWithTag:27005];
     if (!searchPill) {
         searchPill = [UIButton buttonWithType:UIButtonTypeCustom];
         searchPill.tag = 27005;
@@ -279,6 +338,7 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         [self addSubview:searchPill];
     }
 
+    searchPill.hidden = NO;
     CGFloat pillW = 86.0;
     CGFloat pillH = 26.0;
     searchPill.frame = CGRectMake((self.bounds.size.width - pillW) / 2.0, (self.bounds.size.height - pillH) / 2.0, pillW, pillH);
