@@ -1,5 +1,5 @@
 TARGET := iphone:clang:16.5:15.0
-INSTALL_TARGET_PROCESSES = SpringBoard
+INSTALL_TARGET_PROCESSES = SpringBoard Preferences
 ARCHS = arm64 arm64e
 THEOS_PACKAGE_SCHEME = rootless
 
@@ -9,7 +9,7 @@ TWEAK_NAME = iOS27
 
 iOS27_FILES = HomeScreen.x LockScreen.x ControlCenter.x WallpaperEditor.x
 iOS27_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics PhotosUI
+iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics ImageIO
 
 include $(THEOS)/makefiles/tweak.mk
 
