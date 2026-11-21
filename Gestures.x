@@ -33,7 +33,6 @@ static NSInteger gStatusBarStyle = 0; // 0 = Classic SE, 1 = iPhone X, 2 = iPad
 @end
 
 @interface SBAppSwitcherPageView : UIView
-- (void)setCornerRadii:(UIRectCornerRadii)radii;
 @end
 
 // =========================================================================
@@ -108,13 +107,10 @@ static NSInteger gStatusBarStyle = 0; // 0 = Classic SE, 1 = iPhone X, 2 = iPad
 
 + (Class)_visualProviderClassForIdiom:(NSInteger)idiom hasNotch:(BOOL)hasNotch {
     if (gStatusBarStyle == 0) {
-        // Force Classic SE Status Bar even when Gestures are ON
         return %orig(idiom, NO);
     } else if (gStatusBarStyle == 1) {
-        // Force iPhone X Split Status Bar
         return %orig(idiom, YES);
     } else if (gStatusBarStyle == 2) {
-        // iPad Status Bar (Time + Date on Left, Battery + Wi-Fi on Right)
         Class padProvider = NSClassFromString(@"_UIStatusBarVisualProvider_Pad_ForcedCellular");
         if (!padProvider) padProvider = NSClassFromString(@"_UIStatusBarVisualProvider_Pad");
         if (padProvider) return padProvider;
