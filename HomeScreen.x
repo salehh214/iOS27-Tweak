@@ -3,7 +3,26 @@
 #import <objc/runtime.h>
 #import "iOS27Prefs.h"
 
+// RAM-Cached Home Screen Preferences (Zero NSUserDefaults calls during 60fps scrolling/gestures)
 static CGFloat gGlassAlpha = 0.25;
+static NSInteger gDockStyle = 0;
+static BOOL gLargeIcons = YES;
+static NSInteger gIconStyle = 0;
+static NSInteger gIconSubMode = 0;
+static CGFloat gTintHue = 0.55;
+static CGFloat gTintBri = 0.85;
+static NSUInteger gIconStyleEpoch = 1;
+
+static void ReloadHomeScreenCache(void) {
+    gGlassAlpha  = iOS27FloatPref(@"kGlassAlpha", 0.25);
+    gDockStyle   = iOS27IntPref(@"kDockStyle", 0);
+    gLargeIcons  = iOS27BoolPref(@"kHSLargeIcons", YES);
+    gIconStyle   = iOS27IntPref(@"kHSIconStyle", 0);
+    gIconSubMode = iOS27IntPref(@"kHSIconSubMode", 0);
+    gTintHue     = iOS27FloatPref(@"kHSTintHue", 0.55);
+    gTintBri     = iOS27FloatPref(@"kHSTintBrightness", 0.85);
+    gIconStyleEpoch++;
+}
 
 @interface SBIconView : UIView
 - (void)setLabelHidden:(BOOL)hidden;
@@ -64,7 +83,6 @@ static CGFloat gGlassAlpha = 0.25;
 - (void)setDampingRatio:(double)damping;
 @end
 
-// Shared Fake-Glass Style for Dock, Folders & Search Pill
 static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alpha) {
     targetView.backgroundColor = [UIColor colorWithRed:0.12 green:0.16 blue:0.24 alpha:alpha];
     targetView.layer.cornerRadius = cornerRadius;
@@ -84,7 +102,7 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         sheen = [CAGradientLayer layer];
         sheen.name = @"iOS27GlassSheen";
         sheen.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.28].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.26].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor
         ];
@@ -93,22 +111,37 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
         sheen.endPoint = CGPointMake(0.5, 1.0);
         [targetView.layer insertSublayer:sheen atIndex:0];
     }
-    sheen.frame = targetView.bounds;
-    sheen.cornerRadius = cornerRadius;
+    if (!CGRectEqualToRect(sheen.frame, targetView.bounds)) {
+        sheen.frame = targetView.bounds;
+        sheen.cornerRadius = cornerRadius;
+    }
 }
 
-// Universal iOS 27 Liquid Glass Icon Engine (ALL System + 3rd Party Apps)
-static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSInteger subMode, CGFloat tintHue, CGFloat tintBri) {
+// Ultra-Fast Liquid Glass Icon Engine (Zero CAShapeLayer Masks = Zero GPU Offscreen Lag!)
+static const void *kIconEpochKey = &kIconEpochKey;
+
+static void ApplyLiquidGlassToIcon(UIView *iconImgView) {
     if (!iconImgView) return;
 
     CGRect bounds = iconImgView.bounds;
     if (CGRectIsEmpty(bounds) || bounds.size.width < 32.0 || bounds.size.width > 95.0) return;
     if (fabs(bounds.size.width - bounds.size.height) > 4.0) return;
-    if ([iconImgView isKindOfClass:NSClassFromString(@"SBFolderIconImageView")]) return;
+
+    static Class folderImgCls = Nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        folderImgCls = NSClassFromString(@"SBFolderIconImageView");
+    });
+    if (folderImgCls && [iconImgView isKindOfClass:folderImgCls]) return;
+
+    UIView *glassShell = [iconImgView viewWithTag:27888];
+    NSNumber *appliedEpoch = objc_getAssociatedObject(iconImgView, kIconEpochKey);
+    if (glassShell && appliedEpoch && [appliedEpoch unsignedIntegerValue] == gIconStyleEpoch && CGRectEqualToRect(glassShell.bounds, bounds)) {
+        return; // Already up to date -> 0 CPU/GPU work!
+    }
 
     CGFloat radius = floor(bounds.size.width * 0.225);
 
-    UIView *glassShell = [iconImgView viewWithTag:27888];
     if (!glassShell) {
         glassShell = [[UIView alloc] initWithFrame:bounds];
         glassShell.tag = 27888;
@@ -119,144 +152,88 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
         [iconImgView addSubview:glassShell];
     }
 
-    BOOL sizeChanged = !CGRectEqualToRect(glassShell.bounds, bounds);
-    if (sizeChanged) {
-        glassShell.frame = bounds;
-    }
+    glassShell.frame = bounds;
     glassShell.layer.cornerRadius = radius;
     glassShell.hidden = NO;
-    [iconImgView bringSubviewToFront:glassShell];
 
     CAGradientLayer *domeLayer = nil;
-    CAGradientLayer *rimGrad = nil;
-
     for (CALayer *layer in glassShell.layer.sublayers) {
         if ([layer.name isEqualToString:@"iOS27IconDome"]) {
             domeLayer = (CAGradientLayer *)layer;
-        } else if ([layer.name isEqualToString:@"iOS27IconSpecularRim"]) {
-            rimGrad = (CAGradientLayer *)layer;
+            break;
         }
     }
-
     if (!domeLayer) {
         domeLayer = [CAGradientLayer layer];
         domeLayer.name = @"iOS27IconDome";
         domeLayer.startPoint = CGPointMake(0.5, 0.0);
         domeLayer.endPoint = CGPointMake(0.5, 1.0);
-        domeLayer.locations = @[@0.0, @0.32, @0.68, @1.0];
+        domeLayer.locations = @[@0.0, @0.32, @0.70, @1.0];
         [glassShell.layer insertSublayer:domeLayer atIndex:0];
     }
+    domeLayer.frame = bounds;
+    domeLayer.cornerRadius = radius;
 
-    if (!rimGrad) {
-        rimGrad = [CAGradientLayer layer];
-        rimGrad.name = @"iOS27IconSpecularRim";
-        rimGrad.startPoint = CGPointMake(0.25, 0.0);
-        rimGrad.endPoint = CGPointMake(0.75, 1.0);
-        rimGrad.locations = @[@0.0, @0.45, @0.75, @1.0];
+    // Hardware-composited native border (Zero offscreen pass!)
+    glassShell.layer.borderWidth = 1.15;
 
-        CAShapeLayer *rimMask = [CAShapeLayer layer];
-        rimMask.fillColor = [UIColor clearColor].CGColor;
-        rimMask.strokeColor = [UIColor whiteColor].CGColor;
-        rimMask.lineWidth = 2.6;
-        rimGrad.mask = rimMask;
-
-        [glassShell.layer addSublayer:rimGrad];
-    }
-
-    if (sizeChanged || CGRectIsEmpty(domeLayer.frame)) {
-        domeLayer.frame = bounds;
-        domeLayer.cornerRadius = radius;
-        rimGrad.frame = bounds;
-
-        CAShapeLayer *rimMask = (CAShapeLayer *)rimGrad.mask;
-        rimMask.frame = bounds;
-        rimMask.path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:radius].CGPath;
-    }
-
-    if (iconStyle == 0) {
+    if (gIconStyle == 0) {
         iconImgView.alpha = 1.0;
         glassShell.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.05];
+        glassShell.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.62].CGColor;
         domeLayer.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.34].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
-            (id)[UIColor colorWithWhite:0.0 alpha:0.03].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor
+            (id)[UIColor colorWithWhite:1.0 alpha:0.32].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.03].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:0.02].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.16].CGColor
         ];
-        rimGrad.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.88].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.65].CGColor
-        ];
-    } else if (iconStyle == 1) {
+    } else if (gIconStyle == 1) {
         iconImgView.alpha = 0.96;
-        CGFloat darkAlpha = (subMode == 0) ? 0.36 : 0.24;
+        CGFloat darkAlpha = (gIconSubMode == 0) ? 0.36 : 0.24;
         glassShell.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.08 alpha:darkAlpha];
+        glassShell.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.42].CGColor;
         domeLayer.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
-            (id)[UIColor colorWithWhite:0.0 alpha:0.12].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor
+            (id)[UIColor colorWithWhite:0.0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor
         ];
-        rimGrad.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.68].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.45].CGColor
-        ];
-    } else if (iconStyle == 2) {
-        if (subMode == 1) {
+    } else if (gIconStyle == 2) {
+        if (gIconSubMode == 1) {
             iconImgView.alpha = 0.68;
             glassShell.backgroundColor = [UIColor colorWithRed:0.06 green:0.08 blue:0.12 alpha:0.38];
+            glassShell.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.65].CGColor;
             domeLayer.colors = @[
-                (id)[UIColor colorWithWhite:1.0 alpha:0.36].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.05].CGColor,
-                (id)[UIColor colorWithWhite:0.0 alpha:0.10].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor
-            ];
-            rimGrad.colors = @[
-                (id)[UIColor colorWithWhite:1.0 alpha:0.85].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.68].CGColor
+                (id)[UIColor colorWithWhite:1.0 alpha:0.34].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
+                (id)[UIColor colorWithWhite:0.0 alpha:0.08].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.20].CGColor
             ];
         } else {
             iconImgView.alpha = 0.72;
             glassShell.backgroundColor = [UIColor colorWithWhite:0.96 alpha:0.24];
+            glassShell.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.85].CGColor;
             domeLayer.colors = @[
-                (id)[UIColor colorWithWhite:1.0 alpha:0.52].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.48].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.08].CGColor,
                 (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor
-            ];
-            rimGrad.colors = @[
-                (id)[UIColor colorWithWhite:1.0 alpha:0.98].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.34].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.28].CGColor,
-                (id)[UIColor colorWithWhite:1.0 alpha:0.82].CGColor
+                (id)[UIColor colorWithWhite:1.0 alpha:0.28].CGColor
             ];
         }
     } else {
-        iconImgView.alpha = (subMode == 1) ? 0.85 : 0.90;
-        CGFloat tintAlpha = (subMode == 1) ? 0.56 : 0.44;
-        UIColor *tintCol = [UIColor colorWithHue:tintHue saturation:0.80 brightness:tintBri alpha:tintAlpha];
-        UIColor *rimBright = [UIColor colorWithHue:tintHue saturation:0.45 brightness:MIN(tintBri + 0.20, 1.0) alpha:0.95];
-        UIColor *rimSoft = [UIColor colorWithHue:tintHue saturation:0.65 brightness:tintBri alpha:0.28];
-
-        glassShell.backgroundColor = tintCol;
+        iconImgView.alpha = (gIconSubMode == 1) ? 0.85 : 0.90;
+        CGFloat tintAlpha = (gIconSubMode == 1) ? 0.56 : 0.44;
+        glassShell.backgroundColor = [UIColor colorWithHue:gTintHue saturation:0.80 brightness:gTintBri alpha:tintAlpha];
+        glassShell.layer.borderColor = [UIColor colorWithHue:gTintHue saturation:0.45 brightness:MIN(gTintBri + 0.20, 1.0) alpha:0.82].CGColor;
         domeLayer.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.36].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.05].CGColor,
-            (id)[UIColor colorWithWhite:0.0 alpha:0.06].CGColor,
-            (id)[UIColor colorWithHue:tintHue saturation:0.50 brightness:1.0 alpha:0.22].CGColor
-        ];
-        rimGrad.colors = @[
-            (id)rimBright.CGColor,
-            (id)rimSoft.CGColor,
-            (id)rimSoft.CGColor,
-            (id)rimBright.CGColor
+            (id)[UIColor colorWithWhite:1.0 alpha:0.34].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
+            (id)[UIColor colorWithWhite:0.0 alpha:0.05].CGColor,
+            (id)[UIColor colorWithHue:gTintHue saturation:0.50 brightness:1.0 alpha:0.20].CGColor
         ];
     }
+
+    objc_setAssociatedObject(iconImgView, kIconEpochKey, @(gIconStyleEpoch), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 %group HomeScreenHooks
@@ -284,7 +261,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
 - (void)viewDidLayoutSubviews {
     %orig;
     UIImageView *wpView = (UIImageView *)[self.view viewWithTag:27301];
-    if (wpView) {
+    if (wpView && !CGRectEqualToRect(wpView.frame, self.view.bounds)) {
         wpView.frame = self.view.bounds;
         for (CALayer *sub in wpView.layer.sublayers) {
             if ([sub.name isEqualToString:@"iOS27PresetGradient"]) {
@@ -296,6 +273,8 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
 
 %new
 - (void)ios27_syncHomeWallpaper {
+    ReloadHomeScreenCache();
+
     UIImageView *wpView = (UIImageView *)[self.view viewWithTag:27301];
     if (!wpView) {
         wpView = [[UIImageView alloc] initWithFrame:self.view.bounds];
@@ -320,29 +299,19 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", YES);
-    %orig(largeIcons ? YES : hidden);
+    %orig(gLargeIcons ? YES : hidden);
 }
 
 - (void)layoutSubviews {
     %orig;
 
-    BOOL largeIcons = iOS27BoolPref(@"kHSLargeIcons", YES);
-    CGFloat scale = largeIcons ? 1.06 : 0.94;
-    self.transform = CGAffineTransformMakeScale(scale, scale);
-
     @try {
         UIView *labelView = [self valueForKey:@"_labelView"];
-        if ([labelView isKindOfClass:[UIView class]]) {
-            labelView.hidden = largeIcons;
-            labelView.alpha = largeIcons ? 0.0 : 1.0;
+        if ([labelView isKindOfClass:[UIView class]] && labelView.hidden != gLargeIcons) {
+            labelView.hidden = gLargeIcons;
+            labelView.alpha = gLargeIcons ? 0.0 : 1.0;
         }
     } @catch (NSException *e) {}
-
-    NSInteger iconStyle = iOS27IntPref(@"kHSIconStyle", 0);
-    NSInteger subMode = iOS27IntPref(@"kHSIconSubMode", 0);
-    CGFloat tintHue = iOS27FloatPref(@"kHSTintHue", 0.55);
-    CGFloat tintBri = iOS27FloatPref(@"kHSTintBrightness", 0.85);
 
     UIView *iconImgView = nil;
     @try {
@@ -350,7 +319,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     } @catch (NSException *e) {}
 
     if ([iconImgView isKindOfClass:[UIView class]]) {
-        ApplyLiquidGlassToIcon(iconImgView, iconStyle, subMode, tintHue, tintBri);
+        ApplyLiquidGlassToIcon(iconImgView);
     }
 }
 
@@ -360,16 +329,13 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
 - (void)layoutSubviews {
     %orig;
     UIView *bgView = [self valueForKey:@"_backgroundView"];
-    if (bgView) {
+    if (bgView && !bgView.hidden) {
         bgView.hidden = YES;
         bgView.alpha = 0.0;
     }
 
-    // Dock Style: 0 = Floating Glass, 1 = Classic Full-Width Glass, 2 = iPad Compact Pill, 3 = Dark Smoked Glass, 4 = Transparent
-    NSInteger dockStyle = iOS27IntPref(@"kDockStyle", 0);
-
     UIView *glassDock = [self viewWithTag:27001];
-    if (dockStyle == 4) {
+    if (gDockStyle == 4) {
         if (glassDock) glassDock.hidden = YES;
         return;
     }
@@ -382,23 +348,26 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     }
     glassDock.hidden = NO;
 
-    if (dockStyle == 1) {
-        glassDock.frame = self.bounds;
-        ApplyFakeGlass(glassDock, 22.0, gGlassAlpha);
-        glassDock.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
-    } else if (dockStyle == 2) {
-        glassDock.frame = CGRectInset(self.bounds, 18.0, 8.0);
-        ApplyFakeGlass(glassDock, 34.0, gGlassAlpha);
-        glassDock.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-    } else if (dockStyle == 3) {
-        glassDock.frame = CGRectInset(self.bounds, 10.0, 6.0);
-        ApplyFakeGlass(glassDock, 30.0, MAX(gGlassAlpha, 0.52));
-        glassDock.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.08 alpha:0.58];
-        glassDock.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-    } else {
-        glassDock.frame = CGRectInset(self.bounds, 10.0, 6.0);
-        ApplyFakeGlass(glassDock, 30.0, gGlassAlpha);
-        glassDock.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+    CGRect targetFrame = CGRectInset(self.bounds, 10.0, 6.0);
+    CGFloat radius = 30.0;
+    CACornerMask mask = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+
+    if (gDockStyle == 1) {
+        targetFrame = self.bounds;
+        radius = 22.0;
+        mask = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+    } else if (gDockStyle == 2) {
+        targetFrame = CGRectInset(self.bounds, 18.0, 8.0);
+        radius = 34.0;
+    }
+
+    if (!CGRectEqualToRect(glassDock.frame, targetFrame)) {
+        glassDock.frame = targetFrame;
+        ApplyFakeGlass(glassDock, radius, (gDockStyle == 3 ? MAX(gGlassAlpha, 0.52) : gGlassAlpha));
+        if (gDockStyle == 3) {
+            glassDock.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.08 alpha:0.58];
+        }
+        glassDock.layer.maskedCorners = mask;
     }
 }
 %end
@@ -409,7 +378,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     UIView *bgView = [self valueForKey:@"_backgroundView"];
     if (bgView) {
         for (UIView *sub in bgView.subviews) {
-            sub.hidden = YES;
+            if (!sub.hidden) sub.hidden = YES;
         }
         ApplyFakeGlass(bgView, 38.0, gGlassAlpha);
     }
@@ -422,7 +391,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     UIView *bgView = [self valueForKey:@"_backgroundView"];
     if (bgView) {
         for (UIView *sub in bgView.subviews) {
-            sub.hidden = YES;
+            if (!sub.hidden) sub.hidden = YES;
         }
         ApplyFakeGlass(bgView, 16.0, gGlassAlpha);
     }
@@ -443,7 +412,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     if (isEditing) {
         if (searchPill) searchPill.hidden = YES;
         for (UIView *sub in self.subviews) {
-            if (sub.tag != 27005) {
+            if (sub.tag != 27005 && sub.hidden) {
                 sub.hidden = NO;
                 sub.alpha = 1.0;
             }
@@ -452,7 +421,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     }
 
     for (UIView *sub in self.subviews) {
-        if (sub.tag != 27005) {
+        if (sub.tag != 27005 && !sub.hidden) {
             sub.hidden = YES;
             sub.alpha = 0.0;
         }
@@ -481,8 +450,11 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
     searchPill.hidden = NO;
     CGFloat pillW = 86.0;
     CGFloat pillH = 26.0;
-    searchPill.frame = CGRectMake((self.bounds.size.width - pillW) / 2.0, (self.bounds.size.height - pillH) / 2.0, pillW, pillH);
-    ApplyFakeGlass(searchPill, pillH / 2.0, gGlassAlpha);
+    CGRect target = CGRectMake((self.bounds.size.width - pillW) / 2.0, (self.bounds.size.height - pillH) / 2.0, pillW, pillH);
+    if (!CGRectEqualToRect(searchPill.frame, target)) {
+        searchPill.frame = target;
+        ApplyFakeGlass(searchPill, pillH / 2.0, gGlassAlpha);
+    }
 }
 
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
@@ -584,7 +556,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView, NSInteger iconStyle, NSI
 %ctor {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
     if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableHomeScreen", YES)) {
-        gGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.25);
+        ReloadHomeScreenCache();
         %init(HomeScreenHooks);
     }
 }
