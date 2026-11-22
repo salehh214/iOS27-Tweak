@@ -11,47 +11,57 @@
 #define kIOS27ThemeCount 12
 #define kIOS27HSColorCount 10
 
+static inline NSUserDefaults *iOS27SharedPrefs(void) {
+    static NSUserDefaults *shared = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        shared = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    });
+    return shared;
+}
+
 static inline BOOL iOS27BoolPref(NSString *key, BOOL defaultValue) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    id val = [prefs objectForKey:key];
+    id val = [iOS27SharedPrefs() objectForKey:key];
     return val ? [val boolValue] : defaultValue;
 }
 
 static inline void iOS27SetBoolPref(NSString *key, BOOL value) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    NSUserDefaults *prefs = iOS27SharedPrefs();
     [prefs setBool:value forKey:key];
     [prefs synchronize];
 }
 
 static inline CGFloat iOS27FloatPref(NSString *key, CGFloat defaultValue) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    id val = [prefs objectForKey:key];
+    id val = [iOS27SharedPrefs() objectForKey:key];
     return val ? (CGFloat)[val doubleValue] : defaultValue;
 }
 
 static inline void iOS27SetFloatPref(NSString *key, CGFloat value) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    NSUserDefaults *prefs = iOS27SharedPrefs();
     [prefs setDouble:(double)value forKey:key];
     [prefs synchronize];
 }
 
 static inline NSInteger iOS27IntPref(NSString *key, NSInteger defaultValue) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    id val = [prefs objectForKey:key];
+    id val = [iOS27SharedPrefs() objectForKey:key];
     return val ? [val integerValue] : defaultValue;
 }
 
 static inline void iOS27SetIntPref(NSString *key, NSInteger value) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    NSUserDefaults *prefs = iOS27SharedPrefs();
     [prefs setInteger:value forKey:key];
     [prefs synchronize];
 }
 
 static inline NSString *iOS27WallpapersDir(void) {
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
-    NSString *libDir = paths.firstObject ?: @"/var/mobile/Library";
-    NSString *dir = [libDir stringByAppendingPathComponent:@"Preferences/iOS27_Wallpapers"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    static NSString *dir = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
+        NSString *libDir = paths.firstObject ?: @"/var/mobile/Library";
+        dir = [libDir stringByAppendingPathComponent:@"Preferences/iOS27_Wallpapers"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    });
     return dir;
 }
 
@@ -65,7 +75,7 @@ static inline NSString *iOS27HomePhotoPath(void) {
 }
 
 static inline NSMutableArray<NSDictionary *> *iOS27LoadSavedWallpapers(void) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    NSUserDefaults *prefs = iOS27SharedPrefs();
     NSArray *saved = [prefs arrayForKey:@"kSavedWallpapers"];
     if ([saved isKindOfClass:[NSArray class]] && saved.count > 0) {
         return [saved mutableCopy];
@@ -93,7 +103,7 @@ static inline NSMutableArray<NSDictionary *> *iOS27LoadSavedWallpapers(void) {
 }
 
 static inline void iOS27SaveWallpapers(NSArray<NSDictionary *> *list, NSInteger activeIdx) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
+    NSUserDefaults *prefs = iOS27SharedPrefs();
     [prefs setObject:list forKey:@"kSavedWallpapers"];
     NSInteger safeIdx = (list.count > 0) ? MAX(0, MIN(activeIdx, (NSInteger)list.count - 1)) : 0;
     [prefs setInteger:safeIdx forKey:@"kActiveWallpaperIndex"];
@@ -283,7 +293,6 @@ static inline void iOS27ApplyWallpaperToView(UIImageView *wpView) {
     iOS27ApplyProfileToImageView(iOS27ActiveWallpaperProfile(), wpView, NO);
 }
 
-// Home Screen Independent Wallpaper Engine (Pair / Color / Gradient / Photo + Fake-Blur + Dimming)
 static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger hsMode, NSInteger colorIdx, NSInteger gradIdx, BOOL blurOn, BOOL dimOn, BOOL isPreview) {
     if (!wpView) return;
 
@@ -319,7 +328,6 @@ static inline void iOS27ApplyHomeWallpaperToView(UIImageView *wpView, NSInteger 
         }
     }
 
-    // Zero-Lag Fake Blur + Dimming Veil
     UIView *frost = [wpView viewWithTag:27399];
     BOOL needOverlay = (blurOn || dimOn) && !wpView.hidden;
     if (needOverlay) {
