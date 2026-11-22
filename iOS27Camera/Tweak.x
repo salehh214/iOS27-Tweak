@@ -153,7 +153,7 @@ static void ApplyCamGlass(UIView *view, CGFloat radius, BOOL activeGold) {
 
     PHImageRequestOptions *reqOpts = [[PHImageRequestOptions alloc] init];
     reqOpts.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
-    reqOpts.resizeMode = PHImageResizeModeExact;
+    reqOpts.resizeMode = PHImageRequestOptionsResizeModeExact;
     reqOpts.networkAccessAllowed = NO;
     reqOpts.synchronous = NO;
 
