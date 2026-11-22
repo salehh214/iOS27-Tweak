@@ -12,6 +12,40 @@ extern char **environ;
 
 static BOOL gCCEditMode = NO;
 static CGFloat gCCGlassAlpha = 0.28;
+static NSSet<NSString *> *gCCHiddenSet = nil;
+static NSDictionary<NSString *, NSNumber *> *gCCScalesDict = nil;
+
+static void ReloadCCCache(void) {
+    gCCGlassAlpha = iOS27FloatPref(@"kCCGlassIntensity", iOS27FloatPref(@"kGlassAlpha", 0.28));
+    NSArray *arr = [iOS27SharedPrefs() arrayForKey:@"kCCHiddenModules"];
+    gCCHiddenSet = [arr isKindOfClass:[NSArray class]] ? [NSSet setWithArray:arr] : [NSSet set];
+    NSDictionary *dict = [iOS27SharedPrefs() dictionaryForKey:@"kCCModuleScales"];
+    gCCScalesDict = [dict isKindOfClass:[NSDictionary class]] ? dict : @{};
+}
+
+static NSMutableArray<NSString *> *iOS27CCHiddenModules(void) {
+    NSArray *arr = [iOS27SharedPrefs() arrayForKey:@"kCCHiddenModules"];
+    return [arr isKindOfClass:[NSArray class]] ? [arr mutableCopy] : [NSMutableArray array];
+}
+
+static void iOS27CCSaveHiddenModules(NSArray<NSString *> *arr) {
+    NSUserDefaults *prefs = iOS27SharedPrefs();
+    [prefs setObject:(arr ?: @[]) forKey:@"kCCHiddenModules"];
+    [prefs synchronize];
+    ReloadCCCache();
+}
+
+static NSMutableDictionary<NSString *, NSNumber *> *iOS27CCModuleScales(void) {
+    NSDictionary *dict = [iOS27SharedPrefs() dictionaryForKey:@"kCCModuleScales"];
+    return [dict isKindOfClass:[NSDictionary class]] ? [dict mutableCopy] : [NSMutableDictionary dictionary];
+}
+
+static void iOS27CCSaveModuleScales(NSDictionary *dict) {
+    NSUserDefaults *prefs = iOS27SharedPrefs();
+    [prefs setObject:(dict ?: @{}) forKey:@"kCCModuleScales"];
+    [prefs synchronize];
+    ReloadCCCache();
+}
 
 @interface CCUIContentModuleContentContainerView : UIView
 @end
@@ -43,59 +77,24 @@ static CGFloat gCCGlassAlpha = 0.28;
 - (void)ios27_updateEditUI;
 @end
 
-// =========================================================================
-// Persistence Helpers (Hidden Controls, Module Scales & Glass Intensity)
-// =========================================================================
-static NSMutableArray<NSString *> *iOS27CCHiddenModules(void) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    NSArray *arr = [prefs arrayForKey:@"kCCHiddenModules"];
-    return [arr isKindOfClass:[NSArray class]] ? [arr mutableCopy] : [NSMutableArray array];
-}
-
-static void iOS27CCSaveHiddenModules(NSArray<NSString *> *arr) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    [prefs setObject:(arr ?: @[]) forKey:@"kCCHiddenModules"];
-    [prefs synchronize];
-}
-
-static NSMutableDictionary<NSString *, NSNumber *> *iOS27CCModuleScales(void) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    NSDictionary *dict = [prefs dictionaryForKey:@"kCCModuleScales"];
-    return [dict isKindOfClass:[NSDictionary class]] ? [dict mutableCopy] : [NSMutableDictionary dictionary];
-}
-
-static void iOS27CCSaveModuleScales(NSDictionary *dict) {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:kPrefsSuiteName];
-    [prefs setObject:(dict ?: @{}) forKey:@"kCCModuleScales"];
-    [prefs synchronize];
-}
-
-static CGFloat iOS27CCCurrentGlassAlpha(void) {
-    return iOS27FloatPref(@"kCCGlassIntensity", gCCGlassAlpha);
-}
-
-// =========================================================================
-// Lightweight iOS 27 Liquid Glass Renderer (Zero UIVisualEffectView)
-// =========================================================================
+// Zero-Lag Hardware Liquid Glass (No CAShapeLayer Mask!)
 static void ApplyCCLiquidGlass(UIView *view, CGFloat radius, CGFloat alpha) {
     if (!view || CGRectIsEmpty(view.bounds)) return;
 
     view.backgroundColor = [UIColor colorWithRed:0.10 green:0.13 blue:0.20 alpha:alpha];
     view.layer.cornerRadius = radius;
     view.layer.cornerCurve = kCACornerCurveContinuous;
+    view.layer.borderWidth = 1.1;
+    view.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.48].CGColor;
     view.clipsToBounds = YES;
 
     CAGradientLayer *sheen = nil;
-    CAGradientLayer *rimGrad = nil;
-
     for (CALayer *layer in view.layer.sublayers) {
         if ([layer.name isEqualToString:@"iOS27CCSheen"]) {
             sheen = (CAGradientLayer *)layer;
-        } else if ([layer.name isEqualToString:@"iOS27CCRim"]) {
-            rimGrad = (CAGradientLayer *)layer;
+            break;
         }
     }
-
     if (!sheen) {
         sheen = [CAGradientLayer layer];
         sheen.name = @"iOS27CCSheen";
@@ -103,43 +102,21 @@ static void ApplyCCLiquidGlass(UIView *view, CGFloat radius, CGFloat alpha) {
         sheen.endPoint = CGPointMake(0.5, 1.0);
         sheen.locations = @[@0.0, @0.42, @1.0];
         sheen.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.26].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.03].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor
+            (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor
         ];
         [view.layer insertSublayer:sheen atIndex:0];
     }
-
-    if (!rimGrad) {
-        rimGrad = [CAGradientLayer layer];
-        rimGrad.name = @"iOS27CCRim";
-        rimGrad.startPoint = CGPointMake(0.2, 0.0);
-        rimGrad.endPoint = CGPointMake(0.8, 1.0);
-        rimGrad.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.78].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.18].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.55].CGColor
-        ];
-
-        CAShapeLayer *mask = [CAShapeLayer layer];
-        mask.fillColor = [UIColor clearColor].CGColor;
-        mask.strokeColor = [UIColor whiteColor].CGColor;
-        mask.lineWidth = 2.2;
-        rimGrad.mask = mask;
-        [view.layer addSublayer:rimGrad];
+    if (!CGRectEqualToRect(sheen.frame, view.bounds)) {
+        sheen.frame = view.bounds;
+        sheen.cornerRadius = radius;
     }
-
-    sheen.frame = view.bounds;
-    sheen.cornerRadius = radius;
-    rimGrad.frame = view.bounds;
-
-    CAShapeLayer *mask = (CAShapeLayer *)rimGrad.mask;
-    mask.frame = view.bounds;
-    mask.path = [UIBezierPath bezierPathWithRoundedRect:view.bounds cornerRadius:radius].CGPath;
 }
 
 static void StripHeavyBlurViews(UIView *view) {
     for (UIView *sub in view.subviews) {
+        if (sub.hidden) continue;
         NSString *clsName = NSStringFromClass([sub class]);
         if ([clsName containsString:@"MTMaterialView"] || [clsName containsString:@"UIVisualEffectView"]) {
             sub.hidden = YES;
@@ -157,9 +134,7 @@ static void iOS27SendMediaCommand(unsigned int cmd) {
             sendCmd = (void (*)(unsigned int, NSDictionary *))dlsym(handle, "MRMediaRemoteSendCommand");
         }
     });
-    if (sendCmd) {
-        sendCmd(cmd, nil);
-    }
+    if (sendCmd) sendCmd(cmd, nil);
 }
 
 static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
@@ -167,9 +142,6 @@ static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
     posix_spawn(&pid, path, NULL, NULL, args, environ);
 }
 
-// =========================================================================
-// 1. iOS 27 Power Menu Sheet (Respring / Userspace Reboot / Settings)
-// =========================================================================
 @interface IOS27CCPowerSheet : UIView
 @property (nonatomic, copy) void (^onClose)(void);
 @end
@@ -228,26 +200,19 @@ static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
         iOS27RunRootlessBinary("/var/jb/usr/bin/killall", killArgs);
     }
 }
-
 - (void)doUserspace {
     char *const args[] = { "launchctl", "reboot", "userspace", NULL };
     iOS27RunRootlessBinary("/var/jb/usr/bin/launchctl", args);
 }
-
 - (void)doSettings {
     [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"App-Prefs:"] options:@{} completionHandler:nil];
     if (self.onClose) self.onClose();
 }
-
 - (void)doCancel {
     if (self.onClose) self.onClose();
 }
-
 @end
 
-// =========================================================================
-// 2. iOS 27 Controls Gallery Sheet (+ Add a Control & Glass Intensity)
-// =========================================================================
 @interface IOS27CCGallerySheet : UIView
 @property (nonatomic, strong) UIScrollView *scrollView;
 @property (nonatomic, strong) UISlider *glassSlider;
@@ -304,7 +269,7 @@ static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
     self.glassSlider = [[UISlider alloc] initWithFrame:CGRectMake(14, 8, sliderCard.bounds.size.width - 28, 30)];
     self.glassSlider.minimumValue = 0.14;
     self.glassSlider.maximumValue = 0.58;
-    self.glassSlider.value = iOS27CCCurrentGlassAlpha();
+    self.glassSlider.value = gCCGlassAlpha;
     self.glassSlider.minimumTrackTintColor = [UIColor whiteColor];
     [self.glassSlider addTarget:self action:@selector(glassSliderChanged) forControlEvents:UIControlEventValueChanged];
     [sliderCard addSubview:self.glassSlider];
@@ -366,6 +331,7 @@ static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
 
 - (void)glassSliderChanged {
     iOS27SetFloatPref(@"kCCGlassIntensity", self.glassSlider.value);
+    ReloadCCCache();
     [[NSNotificationCenter defaultCenter] postNotificationName:kIOS27CCStyleChanged object:nil];
 }
 
@@ -390,18 +356,13 @@ static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
     [[UIApplication sharedApplication] openURL:[NSURL URLWithString:@"App-Prefs:root=ControlCenter"] options:@{} completionHandler:nil];
     if (self.onClose) self.onClose();
 }
-
 - (void)closeTapped {
     if (self.onClose) self.onClose();
 }
-
 @end
 
-// =========================================================================
-// 3. Dedicated Multi-Page Views (Media Page ♫ & Connectivity Page ((•)))
-// =========================================================================
 @interface IOS27CCExtraPageView : UIView
-@property (nonatomic, assign) NSInteger pageType; // 1 = Media, 2 = Connectivity
+@property (nonatomic, assign) NSInteger pageType;
 @end
 
 @implementation IOS27CCExtraPageView
@@ -525,12 +486,8 @@ static void iOS27RunRootlessBinary(const char *path, char *const args[]) {
         [[UIApplication sharedApplication] openURL:[NSURL URLWithString:urlStr] options:@{} completionHandler:nil];
     }
 }
-
 @end
 
-// =========================================================================
-// 4. Native Control Center Hooks (Liquid Glass + Edit Mode + Top/Right Chrome)
-// =========================================================================
 static const void *kCCChromeSetupKey = &kCCChromeSetupKey;
 static const void *kCCPlusBtnKey = &kCCPlusBtnKey;
 static const void *kCCPowerBtnKey = &kCCPowerBtnKey;
@@ -542,36 +499,30 @@ static const void *kCCModalOverlayKey = &kCCModalOverlayKey;
 %group ControlCenterHooks
 
 %hook CCUIContentModuleContentContainerView
-
 - (void)layoutSubviews {
     %orig;
     StripHeavyBlurViews(self);
     CGFloat minSide = MIN(self.bounds.size.width, self.bounds.size.height);
     CGFloat radius = (minSide > 0 && minSide <= 82.0) ? (minSide / 2.0) : 30.0;
-    ApplyCCLiquidGlass(self, radius, iOS27CCCurrentGlassAlpha());
+    ApplyCCLiquidGlass(self, radius, gCCGlassAlpha);
 }
-
 %end
 
 %hook CCUIBaseSliderView
-
 - (void)layoutSubviews {
     %orig;
     StripHeavyBlurViews(self);
     CGFloat minSide = MIN(self.bounds.size.width, self.bounds.size.height);
     CGFloat radius = (minSide > 0) ? MIN(minSide / 2.0, 32.0) : 28.0;
-    ApplyCCLiquidGlass(self, radius, iOS27CCCurrentGlassAlpha());
+    ApplyCCLiquidGlass(self, radius, gCCGlassAlpha);
 }
-
 %end
 
 %hook CCUIHeaderPocketView
-
 - (void)layoutSubviews {
     %orig;
     StripHeavyBlurViews(self);
 }
-
 %end
 
 %hook CCUIContentModuleContainerViewController
@@ -593,30 +544,27 @@ static const void *kCCModalOverlayKey = &kCCModalOverlayKey;
     if (!v) return;
 
     NSString *modID = [self respondsToSelector:@selector(moduleIdentifier)] ? [self moduleIdentifier] : @"";
-    NSMutableArray *hiddenList = iOS27CCHiddenModules();
-    BOOL isHidden = (modID.length > 0 && [hiddenList containsObject:modID]);
+    BOOL isHidden = (modID.length > 0 && [gCCHiddenSet containsObject:modID]);
 
-    v.hidden = isHidden;
-    v.alpha = isHidden ? 0.0 : 1.0;
+    if (v.hidden != isHidden) {
+        v.hidden = isHidden;
+        v.alpha = isHidden ? 0.0 : 1.0;
+    }
 
-    NSDictionary *scales = iOS27CCModuleScales();
-    NSInteger scaleMode = (modID.length > 0) ? [scales[modID] integerValue] : 0;
+    NSInteger scaleMode = (modID.length > 0) ? [gCCScalesDict[modID] integerValue] : 0;
     CGFloat scaleVal = (scaleMode == 1) ? 0.88 : ((scaleMode == 2) ? 1.06 : 1.0);
-    v.transform = CGAffineTransformMakeScale(scaleVal, scaleVal);
-
-    for (UIView *sub in v.subviews) {
-        if ([NSStringFromClass([sub class]) isEqualToString:@"CCUIContentModuleContentContainerView"]) {
-            [sub setNeedsLayout];
-        }
+    CGAffineTransform targetT = CGAffineTransformMakeScale(scaleVal, scaleVal);
+    if (!CGAffineTransformEqualToTransform(v.transform, targetT)) {
+        v.transform = targetT;
     }
 
     UIButton *minusBtn = (UIButton *)[v viewWithTag:27611];
     UIButton *resizeBtn = (UIButton *)[v viewWithTag:27612];
 
     if (!gCCEditMode || isHidden) {
-        if (minusBtn) minusBtn.hidden = YES;
-        if (resizeBtn) resizeBtn.hidden = YES;
-        [v.layer removeAnimationForKey:@"iOS27Jiggle"];
+        if (minusBtn && !minusBtn.hidden) minusBtn.hidden = YES;
+        if (resizeBtn && !resizeBtn.hidden) resizeBtn.hidden = YES;
+        if ([v.layer animationForKey:@"iOS27Jiggle"]) [v.layer removeAnimationForKey:@"iOS27Jiggle"];
         return;
     }
 
@@ -990,7 +938,7 @@ static const void *kCCModalOverlayKey = &kCCModalOverlayKey;
 %ctor {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
     if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableCC", YES)) {
-        gCCGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.28);
+        ReloadCCCache();
         %init(ControlCenterHooks);
     }
 }
