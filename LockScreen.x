@@ -5,7 +5,15 @@
 
 static CGFloat gLSGlassAlpha = 0.25;
 static BOOL gHasLSNotifications = NO;
+static NSInteger gCachedLSFontIdx = 0;
+static NSInteger gCachedLSColorIdx = 0;
 static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChanged";
+
+static void ReloadLSCache(void) {
+    NSDictionary *profile = iOS27ActiveWallpaperProfile();
+    gCachedLSFontIdx = [profile[@"fontIndex"] integerValue];
+    gCachedLSColorIdx = [profile[@"colorIndex"] integerValue];
+}
 
 @interface _UILegibilitySettings : NSObject
 - (instancetype)initWithStyle:(NSInteger)style primaryColor:(UIColor *)primary secondaryColor:(UIColor *)secondary shadowColor:(UIColor *)shadow;
@@ -22,10 +30,10 @@ static NSString *const kIOS27NotifStateChanged = @"iOS27LSNotificationStateChang
 
 @interface SBFLockScreenDateView : UIView
 - (void)ios27_handleNotificationChange:(NSNotification *)note;
+- (void)ios27_onStyleChanged;
 - (void)ios27_applyClockStyle;
 - (void)_updateLabels;
 - (void)setLegibilitySettings:(id)settings;
-- (void)setTextColor:(UIColor *)color;
 @end
 
 @interface CSQuickActionsButton : UIControl
@@ -72,8 +80,10 @@ static void ApplyLSGlassySheen(UIView *view, CGFloat radius, CGFloat alpha) {
         sheen.endPoint = CGPointMake(0.5, 1.0);
         [view.layer insertSublayer:sheen atIndex:0];
     }
-    sheen.frame = view.bounds;
-    sheen.cornerRadius = radius;
+    if (!CGRectEqualToRect(sheen.frame, view.bounds)) {
+        sheen.frame = view.bounds;
+        sheen.cornerRadius = radius;
+    }
 }
 
 static void PostLSNotificationState(BOOL hasNotifs) {
@@ -88,13 +98,11 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
 %group LockScreenHooks
 
-// Intercept SBUILegibilityLabel specifically for our tagged Lock Screen Clock (tag 27999)
 %hook SBUILegibilityLabel
 
 - (void)setFont:(UIFont *)font {
     if (self.tag == 27999) {
-        NSDictionary *profile = iOS27ActiveWallpaperProfile();
-        %orig(iOS27ClockFontForIndex([profile[@"fontIndex"] integerValue], 78.0));
+        %orig(iOS27ClockFontForIndex(gCachedLSFontIdx, 78.0));
         return;
     }
     %orig;
@@ -102,8 +110,7 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
 - (void)setTextColor:(UIColor *)color {
     if (self.tag == 27999) {
-        NSDictionary *profile = iOS27ActiveWallpaperProfile();
-        %orig(iOS27ClockColorForIndex([profile[@"colorIndex"] integerValue]));
+        %orig(iOS27ClockColorForIndex(gCachedLSColorIdx));
         return;
     }
     %orig;
@@ -111,9 +118,8 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
 - (void)setAttributedText:(NSAttributedString *)attributedText {
     if (self.tag == 27999 && attributedText.length > 0) {
-        NSDictionary *profile = iOS27ActiveWallpaperProfile();
-        UIFont *f = iOS27ClockFontForIndex([profile[@"fontIndex"] integerValue], 78.0);
-        UIColor *c = iOS27ClockColorForIndex([profile[@"colorIndex"] integerValue]);
+        UIFont *f = iOS27ClockFontForIndex(gCachedLSFontIdx, 78.0);
+        UIColor *c = iOS27ClockColorForIndex(gCachedLSColorIdx);
         NSMutableAttributedString *mut = [attributedText mutableCopy];
         NSRange full = NSMakeRange(0, mut.length);
         [mut addAttribute:NSFontAttributeName value:f range:full];
@@ -183,8 +189,6 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 - (void)layoutSubviews {
     %orig;
 
-    [self ios27_applyClockStyle];
-
     static const void *kObserverKey = &kObserverKey;
     if (!objc_getAssociatedObject(self, kObserverKey)) {
         objc_setAssociatedObject(self, kObserverKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -193,9 +197,10 @@ static void PostLSNotificationState(BOOL hasNotifs) {
                                                      name:kIOS27NotifStateChanged
                                                    object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(ios27_applyClockStyle)
+                                                 selector:@selector(ios27_onStyleChanged)
                                                      name:kIOS27LSStyleChanged
                                                    object:nil];
+        [self ios27_applyClockStyle];
     }
 
     UIView *widgetPill = [self viewWithTag:27101];
@@ -210,13 +215,7 @@ static void PostLSNotificationState(BOOL hasNotifs) {
         helloLabel.textAlignment = NSTextAlignmentCenter;
         helloLabel.adjustsFontSizeToFitWidth = YES;
         helloLabel.minimumScaleFactor = 0.75;
-        [widgetPill addSubview:helloLabel];
 
-        [self addSubview:widgetPill];
-    }
-
-    UILabel *helloLabel = (UILabel *)[widgetPill viewWithTag:27102];
-    if (helloLabel) {
         NSString *deviceName = [UIDevice currentDevice].name ?: @"iPhone";
         UIFont *helloFont = [UIFont fontWithName:@"SnellRoundhand-Bold" size:22.0] ?: [UIFont italicSystemFontOfSize:20.0];
         UIFont *nameFont = [UIFont systemFontOfSize:13.5 weight:UIFontWeightSemibold];
@@ -234,16 +233,30 @@ static void PostLSNotificationState(BOOL hasNotifs) {
                                                                              NSBaselineOffsetAttributeName: @(1.5)
                                                                          }]];
         helloLabel.attributedText = attrText;
+        [widgetPill addSubview:helloLabel];
+        [self addSubview:widgetPill];
+    }
 
-        CGSize textSize = [attrText size];
+    UILabel *helloLabel = (UILabel *)[widgetPill viewWithTag:27102];
+    if (helloLabel) {
+        CGSize textSize = [helloLabel.attributedText size];
         CGFloat maxPillWidth = MIN(self.bounds.size.width - 36.0, 260.0);
         CGFloat pillWidth = MIN(MAX(textSize.width + 34.0, 150.0), maxPillWidth);
         CGFloat pillHeight = 38.0;
 
-        widgetPill.frame = CGRectMake((self.bounds.size.width - pillWidth) / 2.0, self.bounds.size.height + 10.0, pillWidth, pillHeight);
-        helloLabel.frame = CGRectInset(widgetPill.bounds, 12.0, 0.0);
-        ApplyLSGlassySheen(widgetPill, pillHeight / 2.0, gLSGlassAlpha);
+        CGRect target = CGRectMake((self.bounds.size.width - pillWidth) / 2.0, self.bounds.size.height + 10.0, pillWidth, pillHeight);
+        if (!CGRectEqualToRect(widgetPill.frame, target)) {
+            widgetPill.frame = target;
+            helloLabel.frame = CGRectInset(widgetPill.bounds, 12.0, 0.0);
+            ApplyLSGlassySheen(widgetPill, pillHeight / 2.0, gLSGlassAlpha);
+        }
     }
+}
+
+%new
+- (void)ios27_onStyleChanged {
+    ReloadLSCache();
+    [self ios27_applyClockStyle];
 }
 
 %new
@@ -256,26 +269,21 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 
     timeLabel.tag = 27999;
 
-    NSDictionary *profile = iOS27ActiveWallpaperProfile();
-    UIFont *targetFont = iOS27ClockFontForIndex([profile[@"fontIndex"] integerValue], 78.0);
-    UIColor *targetColor = iOS27ClockColorForIndex([profile[@"colorIndex"] integerValue]);
-
+    UIFont *targetFont = iOS27ClockFontForIndex(gCachedLSFontIdx, 78.0);
+    UIColor *targetColor = iOS27ClockColorForIndex(gCachedLSColorIdx);
     SBUILegibilityLabel *legLabel = (SBUILegibilityLabel *)timeLabel;
 
-    // Disable heavy shadow bitmap cache so crisp UILabel updates color & font instantly
     if ([legLabel respondsToSelector:@selector(setStrength:)]) {
         legLabel.strength = 0.0;
     }
-
     if ([legLabel respondsToSelector:@selector(setFont:)]) {
         legLabel.font = targetFont;
     }
     if ([legLabel respondsToSelector:@selector(setTextColor:)]) {
         legLabel.textColor = targetColor;
     }
-
     if ([legLabel respondsToSelector:@selector(attributedText)] && legLabel.attributedText.length > 0) {
-        legLabel.attributedText = legLabel.attributedText; // Triggers our hook above
+        legLabel.attributedText = legLabel.attributedText;
     }
 
     Class legClass = NSClassFromString(@"_UILegibilitySettings");
@@ -298,8 +306,6 @@ static void PostLSNotificationState(BOOL hasNotifs) {
     if ([legLabel respondsToSelector:@selector(_updateLegibilityView)]) {
         [legLabel _updateLegibilityView];
     }
-    [timeLabel setNeedsLayout];
-    [timeLabel layoutIfNeeded];
 }
 
 %new
@@ -322,6 +328,7 @@ static void PostLSNotificationState(BOOL hasNotifs) {
 - (void)layoutSubviews {
     %orig;
     for (UIView *sub in self.subviews) {
+        if (sub.hidden) continue;
         if ([NSStringFromClass([sub class]) containsString:@"Material"] || [NSStringFromClass([sub class]) containsString:@"Effect"]) {
             sub.hidden = YES;
         }
@@ -336,6 +343,7 @@ static void PostLSNotificationState(BOOL hasNotifs) {
     if (![[NSBundle mainBundle].bundleIdentifier isEqualToString:@"com.apple.springboard"]) return;
     if (iOS27BoolPref(@"kEnabled", YES) && iOS27BoolPref(@"kEnableLockScreen", YES)) {
         gLSGlassAlpha = iOS27FloatPref(@"kGlassAlpha", 0.25);
+        ReloadLSCache();
         %init(LockScreenHooks);
     }
 }
