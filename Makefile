@@ -1,5 +1,5 @@
 TARGET := iphone:clang:16.5:15.0
-INSTALL_TARGET_PROCESSES = SpringBoard Preferences
+INSTALL_TARGET_PROCESSES = SpringBoard Preferences Camera
 ARCHS = arm64 arm64e
 THEOS_PACKAGE_SCHEME = rootless
 
@@ -13,5 +13,5 @@ iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics ImageIO AVFoundation
 
 include $(THEOS)/makefiles/tweak.mk
 
-SUBPROJECTS += iOS27Prefs
+SUBPROJECTS += iOS27Prefs iOS27Camera
 include $(THEOS_MAKE_PATH)/aggregate.mk
