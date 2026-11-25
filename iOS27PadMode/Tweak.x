@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
 
 #define kPadPrefsSuite @"com.elite.ios27"
 
@@ -26,19 +27,10 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 @interface SBRootFolderController : UIViewController
 @end
 
-@interface CSCoverSheetViewController : UIViewController
+@interface SBMainSwitcherViewController : UIViewController
 @end
 
 @interface CCUIModularControlCenterOverlayViewController : UIViewController
-@end
-
-@interface SBAppSwitcherSettings : NSObject
-- (NSInteger)switcherStyle;
-- (NSInteger)effectiveSwitcherStyle;
-@end
-
-@interface UIStatusBar_Modern : UIView
-+ (Class)_visualProviderClassForIdiom:(NSInteger)idiom hasNotch:(BOOL)hasNotch;
 @end
 
 @interface SBIconView : UIView
@@ -48,18 +40,19 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 // =========================================================================
 // 1. iPhone SE (2016) Anti-Overlap Engine (No Labels + Smaller Spaced Icons)
 // =========================================================================
+static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
+
 %group PadSELayoutHooks
 
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    %orig(YES); // Always remove app text labels to prevent overlap
+    %orig(YES); // Always hide app names so text never overlaps
 }
 
 - (void)layoutSubviews {
     %orig;
 
-    // Force-hide icon text label view
     @try {
         UIView *labelView = [self valueForKey:@"_labelView"];
         if ([labelView isKindOfClass:[UIView class]] && !labelView.hidden) {
@@ -74,8 +67,7 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
     BOOL isLandscape = (screenSize.width > screenSize.height);
     BOOL isWidget = (self.bounds.size.width > 95.0 || self.bounds.size.height > 95.0);
 
-    // Tuned specifically for iPhone SE 2016 (320x568 portrait / 568x320 landscape)
-    // Smaller scale automatically adds crisp spacing (waqfa) between icons with zero overlap
+    // Compact scaling for iPhone SE 2016 (320x568 / 568x320) -> clean spacing (waqfa) & zero overlap
     CGFloat targetScale = 1.0;
     if (isWidget) {
         targetScale = isLandscape ? 0.80 : 0.92;
@@ -83,9 +75,13 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
         targetScale = isLandscape ? 0.74 : 0.84;
     }
 
-    CGAffineTransform desired = CGAffineTransformMakeScale(targetScale, targetScale);
-    if (!CGAffineTransformEqualToTransform(self.transform, desired)) {
-        self.transform = desired;
+    NSNumber *prevScale = objc_getAssociatedObject(self, kPadAppliedScaleKey);
+    BOOL isOurTransform = (prevScale != nil) || CGAffineTransformIsIdentity(self.transform);
+
+    // Only apply when icon is not mid-drag or mid-app-launch zoom animation
+    if (isOurTransform && (!prevScale || fabs([prevScale doubleValue] - targetScale) > 0.005)) {
+        self.transform = CGAffineTransformMakeScale(targetScale, targetScale);
+        objc_setAssociatedObject(self, kPadAppliedScaleKey, @(targetScale), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
 
@@ -94,14 +90,14 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 %end
 
 // =========================================================================
-// 2. Full System Rotation (Home Screen, Lock Screen, Control Center)
+// 2. Crash-Free System Rotation (Home Screen, Control Center, App Switcher)
 // =========================================================================
 %group PadSystemRotationHooks
 
 %hook SpringBoard
 
 - (NSInteger)homeScreenRotationStyle {
-    return 2; // Full iPad-style Home Screen rotation
+    return 1; // Official iOS 15 Phone Landscape Rotation (Style 2 crashes without iPad FloatingDock)
 }
 
 - (BOOL)homeScreenSupportsRotation {
@@ -134,18 +130,6 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 
 %end
 
-%hook CSCoverSheetViewController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
 %hook CCUIModularControlCenterOverlayViewController
 
 - (BOOL)shouldAutorotate {
@@ -158,21 +142,14 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 
 %end
 
-%end
+%hook SBMainSwitcherViewController
 
-// =========================================================================
-// 3. iPadOS / Mac Grid App Switcher
-// =========================================================================
-%group PadGridSwitcherHooks
-
-%hook SBAppSwitcherSettings
-
-- (NSInteger)switcherStyle {
-    return 2;
+- (BOOL)shouldAutorotate {
+    return YES;
 }
 
-- (NSInteger)effectiveSwitcherStyle {
-    return 2;
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 %end
@@ -180,25 +157,7 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 %end
 
 // =========================================================================
-// 4. iPad / Mac Status Bar
-// =========================================================================
-%group PadStatusBarHooks
-
-%hook UIStatusBar_Modern
-
-+ (Class)_visualProviderClassForIdiom:(NSInteger)idiom hasNotch:(BOOL)hasNotch {
-    Class padProvider = NSClassFromString(@"_UIStatusBarVisualProvider_Pad_ForcedCellular");
-    if (!padProvider) padProvider = NSClassFromString(@"_UIStatusBarVisualProvider_Pad");
-    if (padProvider) return padProvider;
-    return %orig;
-}
-
-%end
-
-%end
-
-// =========================================================================
-// 5. Settings App (com.apple.Preferences) -> SE 2016 Tuned Split View
+// 3. Settings App (com.apple.Preferences) -> SE 2016 Landscape Split View
 // =========================================================================
 %group PadSettingsAppHooks
 
@@ -231,7 +190,6 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
     } else {
         self.preferredDisplayMode = UISplitViewControllerDisplayModeAllVisible;
     }
-    // Proportioned for 568pt SE 2016 landscape width so sidebar & detail pane never squish
     self.preferredPrimaryColumnWidthFraction = 0.35;
     self.minimumPrimaryColumnWidth = 175.0;
     self.maximumPrimaryColumnWidth = 200.0;
@@ -247,10 +205,14 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 
 - (UITraitCollection *)traitCollection {
     UITraitCollection *orig = %orig;
+    if (!orig) return orig;
+
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
     if (screenSize.width > screenSize.height) {
         UITraitCollection *regularW = [UITraitCollection traitCollectionWithHorizontalSizeClass:UIUserInterfaceSizeClassRegular];
-        return [UITraitCollection traitCollectionWithTraitsFromCollections:@[orig, regularW]];
+        if (regularW) {
+            return [UITraitCollection traitCollectionWithTraitsFromCollections:@[orig, regularW]];
+        }
     }
     return orig;
 }
@@ -260,7 +222,7 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 %end
 
 // =========================================================================
-// Constructor (RAM-Cached, Zero Overhead when OFF)
+// Constructor (RAM-Cached, Zero Safe-Mode Crashes)
 // =========================================================================
 %ctor {
     if (!PadBoolPref(@"kEnabled", YES)) return;
@@ -274,12 +236,6 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
         %init(PadSELayoutHooks);
         if (PadBoolPref(@"kPadRotateSystem", YES)) {
             %init(PadSystemRotationHooks);
-        }
-        if (PadBoolPref(@"kPadGridSwitcher", YES)) {
-            %init(PadGridSwitcherHooks);
-        }
-        if (PadBoolPref(@"kPadStatusBar", YES)) {
-            %init(PadStatusBarHooks);
         }
     } else if ([bundleID isEqualToString:@"com.apple.Preferences"]) {
         if (PadBoolPref(@"kPadSplitSettings", YES)) {
