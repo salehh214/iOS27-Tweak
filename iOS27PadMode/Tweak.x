@@ -22,14 +22,25 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 }
 
 @interface SpringBoard : UIApplication
-- (NSInteger)homeScreenRotationStyle;
 - (BOOL)homeScreenSupportsRotation;
 @end
 
 @interface SBHomeScreenViewController : UIViewController
 @end
 
+@interface SBRootFolderController : UIViewController
+@end
+
+@interface SBIconController : UIViewController
+@end
+
+@interface CSCoverSheetViewController : UIViewController
+@end
+
 @interface CCUIModularControlCenterOverlayViewController : UIViewController
+@end
+
+@interface SBMainSwitcherViewController : UIViewController
 @end
 
 @interface SBIconView : UIView
@@ -37,7 +48,7 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 @end
 
 // =========================================================================
-// 1. iPhone SE (2016) Anti-Overlap Engine (No Text Labels + Spaced Compact Icons)
+// 1. iPhone SE (2016) Anti-Overlap Engine (No Labels + Exact Landscape Fit)
 // =========================================================================
 static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
@@ -46,13 +57,12 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    %orig(YES);
+    %orig(YES); // Always hide app names so text never overlaps
 }
 
 - (void)layoutSubviews {
     %orig;
 
-    // Safely hide icon text label only if ivar exists (prevents NSUndefinedKeyException)
     if (class_getInstanceVariable([self class], "_labelView") != NULL) {
         UIView *labelView = [self valueForKey:@"_labelView"];
         if ([labelView isKindOfClass:[UIView class]] && !labelView.hidden) {
@@ -66,13 +76,17 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     CGSize screenSize = [UIScreen mainScreen].bounds.size;
     BOOL isLandscape = (screenSize.width > screenSize.height);
     BOOL isWidget = (self.bounds.size.width > 95.0 || self.bounds.size.height > 95.0);
+    BOOL isInDock = [NSStringFromClass([self.superview class]) containsString:@"Dock"];
 
-    // Compact scaling for 320x568 / 568x320 SE 2016 screen -> clean waqfa & zero overlap
+    // Exact scale math for iPhone SE 2016 (320x568 Portrait / 568x320 Landscape):
+    // In landscape, 5 rows fit inside ~200pt height -> 0.56 scale keeps clean spacing (waqfa) & 0% overlap
     CGFloat targetScale = 1.0;
     if (isWidget) {
-        targetScale = isLandscape ? 0.78 : 0.92;
+        targetScale = isLandscape ? 0.62 : 0.92;
+    } else if (isInDock) {
+        targetScale = isLandscape ? 0.64 : 0.84;
     } else {
-        targetScale = isLandscape ? 0.72 : 0.84;
+        targetScale = isLandscape ? 0.56 : 0.84;
     }
 
     NSNumber *prevScale = objc_getAssociatedObject(self, kPadAppliedScaleKey);
@@ -89,18 +103,30 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// 2. Crash-Free Home Screen & Control Center Rotation (No iPad FloatingDock Crash)
+// 2. Crash-Free UIKit Window & ViewController Rotation (No homeScreenRotationStyle Crash)
 // =========================================================================
 %group PadSystemRotationHooks
 
 %hook SpringBoard
 
-- (NSInteger)homeScreenRotationStyle {
-    return 1; // Safe native iPhone landscape rotation (Style 2 crashes without iPad FloatingDock)
-}
-
 - (BOOL)homeScreenSupportsRotation {
     return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+%end
+
+%hook SBIconController
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 %end
@@ -117,7 +143,43 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
 %end
 
+%hook SBRootFolderController
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+%end
+
+%hook CSCoverSheetViewController
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+%end
+
 %hook CCUIModularControlCenterOverlayViewController
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+%end
+
+%hook SBMainSwitcherViewController
 
 - (BOOL)shouldAutorotate {
     return YES;
@@ -172,7 +234,6 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
 - (void)viewWillLayoutSubviews {
     %orig;
-    // Official UIKit child trait override (zero recursion/crash unlike overriding -traitCollection)
     BOOL isLandscape = (self.view.bounds.size.width > self.view.bounds.size.height);
     UITraitCollection *overrideTrait = isLandscape
         ? [UITraitCollection traitCollectionWithHorizontalSizeClass:UIUserInterfaceSizeClassRegular]
@@ -208,26 +269,28 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     NSString *bundleID = [NSBundle mainBundle].bundleIdentifier;
 
     if ([bundleID isEqualToString:@"com.apple.springboard"]) {
-        // If previous SpringBoard launch crashed within 8s, auto-disable Pad Mode so phone never enters Safe Mode
-        if (PadBoolPref(kPadBootGuardKey, NO)) {
-            [PadPrefs() setBool:NO forKey:@"kEnablePadMode"];
+        BOOL rotateOn = PadBoolPref(@"kPadRotateSystem", YES);
+
+        if (rotateOn && PadBoolPref(kPadBootGuardKey, NO)) {
+            [PadPrefs() setBool:NO forKey:@"kPadRotateSystem"];
             [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
             [PadPrefs() synchronize];
-            return;
+            rotateOn = NO;
         }
 
-        [PadPrefs() setBool:YES forKey:kPadBootGuardKey];
-        [PadPrefs() synchronize];
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
+        if (rotateOn) {
+            [PadPrefs() setBool:YES forKey:kPadBootGuardKey];
             [PadPrefs() synchronize];
-        });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
+                [PadPrefs() synchronize];
+            });
+        }
 
         gPadCompactIcons = PadBoolPref(@"kPadCompactIcons", YES);
         %init(PadSELayoutHooks);
 
-        if (PadBoolPref(@"kPadRotateSystem", YES)) {
+        if (rotateOn) {
             %init(PadSystemRotationHooks);
         }
     } else if ([bundleID isEqualToString:@"com.apple.Preferences"]) {
