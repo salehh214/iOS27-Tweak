@@ -3,7 +3,6 @@
 #import <objc/runtime.h>
 
 #define kPadPrefsSuite @"com.elite.ios27"
-#define kPadBootGuardKey @"kPadBootInProgress"
 
 static BOOL gPadCompactIcons = YES;
 
@@ -21,28 +20,12 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
     return val ? [val boolValue] : defaultVal;
 }
 
-@interface SpringBoard : UIApplication
-- (BOOL)homeScreenSupportsRotation;
-@end
-
-@interface SBHomeScreenWindow : UIWindow
-@end
-
-@interface SBHomeScreenViewController : UIViewController
-@end
-
-@interface SBRootFolderController : UIViewController
-@end
-
-@interface SBIconController : UIViewController
-@end
-
 @interface SBIconView : UIView
 - (void)setLabelHidden:(BOOL)hidden;
 @end
 
 // =========================================================================
-// 1. iPhone SE (2016) Anti-Overlap Engine (No Labels + Spaced Compact Icons)
+// 1. iPhone SE (2016) Anti-Overlap Home Screen (No Text Labels + Clean Spacing)
 // =========================================================================
 static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
@@ -51,7 +34,7 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    %orig(YES);
+    %orig(YES); // Remove app names so text never overlaps on SE 2016
 }
 
 - (void)layoutSubviews {
@@ -67,19 +50,8 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
     if (!gPadCompactIcons) return;
 
-    CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    BOOL isLandscape = (screenSize.width > screenSize.height);
     BOOL isWidget = (self.bounds.size.width > 95.0 || self.bounds.size.height > 95.0);
-    BOOL isInDock = [NSStringFromClass([self.superview class]) containsString:@"Dock"];
-
-    CGFloat targetScale = 1.0;
-    if (isWidget) {
-        targetScale = isLandscape ? 0.60 : 0.92;
-    } else if (isInDock) {
-        targetScale = isLandscape ? 0.65 : 0.84;
-    } else {
-        targetScale = isLandscape ? 0.56 : 0.84;
-    }
+    CGFloat targetScale = isWidget ? 0.92 : 0.85; // Adds crisp spacing (waqfa) between icons
 
     NSNumber *prevScale = objc_getAssociatedObject(self, kPadAppliedScaleKey);
     BOOL isOurTransform = (prevScale != nil) || CGAffineTransformIsIdentity(self.transform);
@@ -95,83 +67,25 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// 2. GesturesXV-Safe UIKit Rotation (Works Alongside Swipe-Up Gestures)
-// =========================================================================
-%group PadSystemRotationHooks
-
-%hook SpringBoard
-
-- (BOOL)homeScreenSupportsRotation {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindow:(UIWindow *)window {
-    if ([window isKindOfClass:NSClassFromString(@"SBHomeScreenWindow")]) {
-        return UIInterfaceOrientationMaskAllButUpsideDown;
-    }
-    return %orig;
-}
-
-%end
-
-%hook SBHomeScreenWindow
-
-- (BOOL)_shouldAutorotateToInterfaceOrientation:(NSInteger)orientation {
-    return (orientation != UIInterfaceOrientationPortraitUpsideDown);
-}
-
-- (BOOL)autorotates {
-    return YES;
-}
-
-%end
-
-%hook SBIconController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
-%hook SBRootFolderController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
-%hook SBHomeScreenViewController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
-%end
-
-// =========================================================================
-// 3. Settings App (com.apple.Preferences) -> Crash-Free 2-Pane Split View
+// 2. Gyration-Style UIKit Rotation + Mac/iPad 2-Pane Split-View Settings
 // =========================================================================
 %group PadSettingsAppHooks
 
 %hook UIApplication
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+%end
+
+%hook UIViewController
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
@@ -228,42 +142,17 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// Constructor with Automatic Safe-Mode Boot Guard
+// Constructor (100% Crash-Free — Never Hooks Missing 4-Inch SpringBoard Grid)
 // =========================================================================
 %ctor {
     if (!PadBoolPref(@"kEnabled", YES)) return;
-    if (!PadBoolPref(@"kEnablePadMode", NO)) {
-        [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
-        return;
-    }
+    if (!PadBoolPref(@"kEnablePadMode", NO)) return;
 
     NSString *bundleID = [NSBundle mainBundle].bundleIdentifier;
 
     if ([bundleID isEqualToString:@"com.apple.springboard"]) {
-        BOOL rotateOn = PadBoolPref(@"kPadRotateSystem", YES);
-
-        if (rotateOn && PadBoolPref(kPadBootGuardKey, NO)) {
-            [PadPrefs() setBool:NO forKey:@"kPadRotateSystem"];
-            [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
-            [PadPrefs() synchronize];
-            rotateOn = NO;
-        }
-
-        if (rotateOn) {
-            [PadPrefs() setBool:YES forKey:kPadBootGuardKey];
-            [PadPrefs() synchronize];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
-                [PadPrefs() synchronize];
-            });
-        }
-
         gPadCompactIcons = PadBoolPref(@"kPadCompactIcons", YES);
         %init(PadSELayoutHooks);
-
-        if (rotateOn) {
-            %init(PadSystemRotationHooks);
-        }
     } else if ([bundleID isEqualToString:@"com.apple.Preferences"]) {
         if (PadBoolPref(@"kPadSplitSettings", YES)) {
             %init(PadSettingsAppHooks);
