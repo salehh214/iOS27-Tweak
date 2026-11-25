@@ -31,7 +31,7 @@
 			<key>label</key>
 			<string>iPad / Mac Mode</string>
 			<key>footerText</key>
-			<string>Rotates Home Screen, Control Center &amp; Settings into iPad/Mac landscape mode with compact no-overlap SE 2016 icon spacing while keeping 3rd-party apps normal. Respring after toggling.</string>
+			<string>Rotates Home Screen &amp; Settings into iPad/Mac landscape mode with compact no-overlap SE 2016 icons while keeping swipe-up gestures active. Respring after toggling.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -67,7 +67,7 @@
 			<key>key</key>
 			<string>kPadRotateSystem</string>
 			<key>label</key>
-			<string>Rotate Home &amp; Control Center</string>
+			<string>Rotate Home Screen</string>
 		</dict>
 		<dict>
 			<key>cell</key>
