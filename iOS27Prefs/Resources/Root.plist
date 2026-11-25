@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>Master Control</string>
 			<key>footerText</key>
-			<string>iOS 27 Liquid Glass &amp; Gestures Engine for iOS 15.8.8 (Zero-Blur 2GB RAM Optimized).</string>
+			<string>iOS 27 Liquid Glass, Gestures &amp; iPad/Mac Engine for iOS 15.8.8 (Zero-Blur 2GB RAM Optimized).</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -23,6 +23,63 @@
 			<string>kEnabled</string>
 			<key>label</key>
 			<string>Enable iOS 27 Tweak</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>iPad / Mac Mode</string>
+			<key>footerText</key>
+			<string>Rotates Home Screen, Control Center &amp; Settings into iPad/Mac landscape mode with compact no-overlap SE 2016 icon spacing while keeping 3rd-party apps normal. Respring after toggling.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kEnablePadMode</string>
+			<key>label</key>
+			<string>Enable iPad / Mac Mode</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kPadCompactIcons</string>
+			<key>label</key>
+			<string>Compact Icons (No Overlap)</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kPadRotateSystem</string>
+			<key>label</key>
+			<string>Rotate Home &amp; Control Center</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.elite.ios27</string>
+			<key>key</key>
+			<string>kPadSplitSettings</string>
+			<key>label</key>
+			<string>Mac/iPad Split-View Settings</string>
 		</dict>
 
 		<dict>
