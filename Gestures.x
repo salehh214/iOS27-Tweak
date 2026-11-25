@@ -7,7 +7,7 @@ static BOOL gClassicKeyboard = YES;
 static BOOL gHideHomeBar = NO;
 static BOOL gRoundedSwitcher = YES;
 static BOOL gLockQuickActions = YES;
-static NSInteger gStatusBarStyle = 0; // 0 = Classic SE, 1 = iPhone X, 2 = iPad
+static NSInteger gStatusBarStyle = 0;
 
 @interface BSPlatform : NSObject
 - (NSInteger)homeButtonType;
@@ -35,76 +35,53 @@ static NSInteger gStatusBarStyle = 0; // 0 = Classic SE, 1 = iPhone X, 2 = iPad
 @interface SBAppSwitcherPageView : UIView
 @end
 
-// =========================================================================
-// 1. Core Fluid Swipe-Up Gestures (GesturesXV Engine)
-// =========================================================================
 %group FluidGesturesHooks
 
 %hook BSPlatform
-
 - (NSInteger)homeButtonType {
-    return 2; // Enables native iPhone X / iOS 27 fluid gestures in SpringBoard
+    return 2;
 }
-
 %end
 
 %hook SBHomeGestureSettings
-
 - (BOOL)isHomeGestureEnabled {
     return YES;
 }
-
 %end
 
 %end
 
-// =========================================================================
-// 2. Classic Keyboard Protection (No Tall Bottom Chin on SE 2016)
-// =========================================================================
 %group ClassicKeyboardHooks
 
 %hook UIKeyboardImpl
-
 + (UIEdgeInsets)deviceSpecificPaddingForInterfaceOrientation:(NSInteger)orientation inputMode:(id)mode {
     return UIEdgeInsetsZero;
 }
-
 %end
 
 %end
 
-// =========================================================================
-// 3. Home Bar Visibility Toggle
-// =========================================================================
 %group HideHomeBarHooks
 
 %hook MTLumaDodgePillView
-
 - (void)setAlpha:(CGFloat)alpha {
     %orig(0.0);
 }
-
 - (void)setHidden:(BOOL)hidden {
     %orig(YES);
 }
-
 - (void)layoutSubviews {
     %orig;
     self.alpha = 0.0;
     self.hidden = YES;
 }
-
 %end
 
 %end
 
-// =========================================================================
-// 4. Status Bar Style Selector (0 = Classic SE, 1 = iPhone X, 2 = iPad)
-// =========================================================================
 %group StatusBarStyleHooks
 
 %hook UIStatusBar_Modern
-
 + (Class)_visualProviderClassForIdiom:(NSInteger)idiom hasNotch:(BOOL)hasNotch {
     if (gStatusBarStyle == 0) {
         return %orig(idiom, NO);
@@ -117,40 +94,29 @@ static NSInteger gStatusBarStyle = 0; // 0 = Classic SE, 1 = iPhone X, 2 = iPad
     }
     return %orig;
 }
-
 %end
 
 %end
 
-// =========================================================================
-// 5. Rounded App Switcher Cards
-// =========================================================================
 %group RoundedSwitcherHooks
 
 %hook SBAppSwitcherPageView
-
 - (void)layoutSubviews {
     %orig;
     self.layer.cornerRadius = 24.0;
     self.layer.cornerCurve = kCACornerCurveContinuous;
     self.clipsToBounds = YES;
 }
-
 %end
 
 %end
 
-// =========================================================================
-// 6. Lock Screen Flashlight & Camera Quick Actions Toggle
-// =========================================================================
 %group QuickActionsHooks
 
 %hook CSQuickActionsViewController
-
 + (BOOL)deviceSupportsButtons {
     return gLockQuickActions;
 }
-
 %end
 
 %end
