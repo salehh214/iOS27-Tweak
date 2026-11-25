@@ -19,15 +19,10 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 @interface SpringBoard : UIApplication
 - (NSInteger)homeScreenRotationStyle;
 - (BOOL)homeScreenSupportsRotation;
+- (BOOL)homeScreenRotationStyleWantsUIKitRotation;
 @end
 
 @interface SBHomeScreenViewController : UIViewController
-@end
-
-@interface SBRootFolderController : UIViewController
-@end
-
-@interface SBMainSwitcherViewController : UIViewController
 @end
 
 @interface CCUIModularControlCenterOverlayViewController : UIViewController
@@ -47,7 +42,7 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
-    %orig(YES); // Always hide app names so text never overlaps
+    %orig(YES);
 }
 
 - (void)layoutSubviews {
@@ -67,7 +62,6 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     BOOL isLandscape = (screenSize.width > screenSize.height);
     BOOL isWidget = (self.bounds.size.width > 95.0 || self.bounds.size.height > 95.0);
 
-    // Compact scaling for iPhone SE 2016 (320x568 / 568x320) -> clean spacing (waqfa) & zero overlap
     CGFloat targetScale = 1.0;
     if (isWidget) {
         targetScale = isLandscape ? 0.80 : 0.92;
@@ -78,7 +72,6 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     NSNumber *prevScale = objc_getAssociatedObject(self, kPadAppliedScaleKey);
     BOOL isOurTransform = (prevScale != nil) || CGAffineTransformIsIdentity(self.transform);
 
-    // Only apply when icon is not mid-drag or mid-app-launch zoom animation
     if (isOurTransform && (!prevScale || fabs([prevScale doubleValue] - targetScale) > 0.005)) {
         self.transform = CGAffineTransformMakeScale(targetScale, targetScale);
         objc_setAssociatedObject(self, kPadAppliedScaleKey, @(targetScale), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -90,35 +83,27 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// 2. Crash-Free System Rotation (Home Screen, Control Center, App Switcher)
+// 2. GesturesXV-Compatible System Rotation (Style 2 + UIKit Rotation)
 // =========================================================================
 %group PadSystemRotationHooks
 
 %hook SpringBoard
 
 - (NSInteger)homeScreenRotationStyle {
-    return 1; // Official iOS 15 Phone Landscape Rotation (Style 2 crashes without iPad FloatingDock)
+    return 2; // UIKit bottom-dock rotation (Compatible with Gestures.x homeButtonType = 2)
 }
 
 - (BOOL)homeScreenSupportsRotation {
     return YES;
 }
 
-%end
-
-%hook SBHomeScreenViewController
-
-- (BOOL)shouldAutorotate {
+- (BOOL)homeScreenRotationStyleWantsUIKitRotation {
     return YES;
 }
 
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
 %end
 
-%hook SBRootFolderController
+%hook SBHomeScreenViewController
 
 - (BOOL)shouldAutorotate {
     return YES;
@@ -142,22 +127,10 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
 %end
 
-%hook SBMainSwitcherViewController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
 %end
 
 // =========================================================================
-// 3. Settings App (com.apple.Preferences) -> SE 2016 Landscape Split View
+// 3. Settings App (com.apple.Preferences) -> SE 2016 Mac/iPad Split View
 // =========================================================================
 %group PadSettingsAppHooks
 
@@ -222,11 +195,11 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// Constructor (RAM-Cached, Zero Safe-Mode Crashes)
+// Constructor (Defaults to OFF on first install -> Guaranteed Clean Boot)
 // =========================================================================
 %ctor {
     if (!PadBoolPref(@"kEnabled", YES)) return;
-    if (!PadBoolPref(@"kEnablePadMode", YES)) return;
+    if (!PadBoolPref(@"kEnablePadMode", NO)) return;
 
     gPadCompactIcons = PadBoolPref(@"kPadCompactIcons", YES);
 
