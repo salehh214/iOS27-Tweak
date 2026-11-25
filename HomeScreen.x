@@ -3,10 +3,10 @@
 #import <objc/runtime.h>
 #import "iOS27Prefs.h"
 
-// RAM-Cached Home Screen Preferences (Zero NSUserDefaults calls during 60fps scrolling/gestures)
 static CGFloat gGlassAlpha = 0.25;
 static NSInteger gDockStyle = 0;
 static BOOL gLargeIcons = YES;
+static BOOL gPadModeActive = NO;
 static NSInteger gIconStyle = 0;
 static NSInteger gIconSubMode = 0;
 static CGFloat gTintHue = 0.55;
@@ -14,13 +14,14 @@ static CGFloat gTintBri = 0.85;
 static NSUInteger gIconStyleEpoch = 1;
 
 static void ReloadHomeScreenCache(void) {
-    gGlassAlpha  = iOS27FloatPref(@"kGlassAlpha", 0.25);
-    gDockStyle   = iOS27IntPref(@"kDockStyle", 0);
-    gLargeIcons  = iOS27BoolPref(@"kHSLargeIcons", YES);
-    gIconStyle   = iOS27IntPref(@"kHSIconStyle", 0);
-    gIconSubMode = iOS27IntPref(@"kHSIconSubMode", 0);
-    gTintHue     = iOS27FloatPref(@"kHSTintHue", 0.55);
-    gTintBri     = iOS27FloatPref(@"kHSTintBrightness", 0.85);
+    gGlassAlpha    = iOS27FloatPref(@"kGlassAlpha", 0.25);
+    gDockStyle     = iOS27IntPref(@"kDockStyle", 0);
+    gLargeIcons    = iOS27BoolPref(@"kHSLargeIcons", YES);
+    gPadModeActive = iOS27BoolPref(@"kEnablePadMode", NO);
+    gIconStyle     = iOS27IntPref(@"kHSIconStyle", 0);
+    gIconSubMode   = iOS27IntPref(@"kHSIconSubMode", 0);
+    gTintHue       = iOS27FloatPref(@"kHSTintHue", 0.55);
+    gTintBri       = iOS27FloatPref(@"kHSTintBrightness", 0.85);
     gIconStyleEpoch++;
 }
 
@@ -117,14 +118,13 @@ static void ApplyFakeGlass(UIView *targetView, CGFloat cornerRadius, CGFloat alp
     }
 }
 
-// Ultra-Fast Liquid Glass Icon Engine (Zero CAShapeLayer Masks = Zero GPU Offscreen Lag!)
 static const void *kIconEpochKey = &kIconEpochKey;
 
 static void ApplyLiquidGlassToIcon(UIView *iconImgView) {
     if (!iconImgView) return;
 
     CGRect bounds = iconImgView.bounds;
-    if (CGRectIsEmpty(bounds) || bounds.size.width < 32.0 || bounds.size.width > 95.0) return;
+    if (CGRectIsEmpty(bounds) || bounds.size.width < 28.0 || bounds.size.width > 95.0) return;
     if (fabs(bounds.size.width - bounds.size.height) > 4.0) return;
 
     static Class folderImgCls = Nil;
@@ -137,7 +137,7 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView) {
     UIView *glassShell = [iconImgView viewWithTag:27888];
     NSNumber *appliedEpoch = objc_getAssociatedObject(iconImgView, kIconEpochKey);
     if (glassShell && appliedEpoch && [appliedEpoch unsignedIntegerValue] == gIconStyleEpoch && CGRectEqualToRect(glassShell.bounds, bounds)) {
-        return; // Already up to date -> 0 CPU/GPU work!
+        return;
     }
 
     CGFloat radius = floor(bounds.size.width * 0.225);
@@ -173,8 +173,6 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView) {
     }
     domeLayer.frame = bounds;
     domeLayer.cornerRadius = radius;
-
-    // Hardware-composited native border (Zero offscreen pass!)
     glassShell.layer.borderWidth = 1.15;
 
     if (gIconStyle == 0) {
@@ -299,19 +297,25 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView) {
 %hook SBIconView
 
 - (void)setLabelHidden:(BOOL)hidden {
+    if (gPadModeActive) {
+        %orig;
+        return;
+    }
     %orig(gLargeIcons ? YES : hidden);
 }
 
 - (void)layoutSubviews {
     %orig;
 
-    @try {
-        UIView *labelView = [self valueForKey:@"_labelView"];
-        if ([labelView isKindOfClass:[UIView class]] && labelView.hidden != gLargeIcons) {
-            labelView.hidden = gLargeIcons;
-            labelView.alpha = gLargeIcons ? 0.0 : 1.0;
-        }
-    } @catch (NSException *e) {}
+    if (!gPadModeActive) {
+        @try {
+            UIView *labelView = [self valueForKey:@"_labelView"];
+            if ([labelView isKindOfClass:[UIView class]] && labelView.hidden != gLargeIcons) {
+                labelView.hidden = gLargeIcons;
+                labelView.alpha = gLargeIcons ? 0.0 : 1.0;
+            }
+        } @catch (NSException *e) {}
+    }
 
     UIView *iconImgView = nil;
     @try {
@@ -348,17 +352,25 @@ static void ApplyLiquidGlassToIcon(UIView *iconImgView) {
     }
     glassDock.hidden = NO;
 
-    CGRect targetFrame = CGRectInset(self.bounds, 10.0, 6.0);
-    CGFloat radius = 30.0;
+    BOOL isVerticalSideDock = (self.bounds.size.height > self.bounds.size.width);
+
+    CGRect targetFrame;
+    CGFloat radius;
     CACornerMask mask = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner | kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
 
-    if (gDockStyle == 1) {
+    if (isVerticalSideDock) {
+        targetFrame = CGRectInset(self.bounds, 5.0, 10.0);
+        radius = 20.0;
+    } else if (gDockStyle == 1) {
         targetFrame = self.bounds;
         radius = 22.0;
         mask = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
     } else if (gDockStyle == 2) {
         targetFrame = CGRectInset(self.bounds, 18.0, 8.0);
         radius = 34.0;
+    } else {
+        targetFrame = CGRectInset(self.bounds, 10.0, 6.0);
+        radius = 30.0;
     }
 
     if (!CGRectEqualToRect(glassDock.frame, targetFrame)) {
