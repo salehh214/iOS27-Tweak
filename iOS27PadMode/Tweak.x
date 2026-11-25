@@ -6,6 +6,7 @@
 #define kPadBootGuardKey @"kPadBootInProgress"
 
 static BOOL gPadCompactIcons = YES;
+static uint16_t gForcePadIdiom = 0; // Scoped idiom counter (TrollPad method - prevents SE 2016 grid crash)
 
 static NSUserDefaults *PadPrefs(void) {
     static NSUserDefaults *prefs = nil;
@@ -22,7 +23,12 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 }
 
 @interface SpringBoard : UIApplication
+- (NSInteger)homeScreenRotationStyle;
 - (BOOL)homeScreenSupportsRotation;
+@end
+
+@interface SBHDefaultIconListLayoutProvider : NSObject
+- (instancetype)initWithScreenType:(NSUInteger)screenType;
 @end
 
 @interface SBHomeScreenViewController : UIViewController
@@ -34,13 +40,14 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 @interface SBIconController : UIViewController
 @end
 
-@interface CSCoverSheetViewController : UIViewController
+@interface SBCoverSheetPrimarySlidingViewController : UIViewController
 @end
 
 @interface CCUIModularControlCenterOverlayViewController : UIViewController
 @end
 
-@interface SBMainSwitcherViewController : UIViewController
+@interface SBTraitsSceneParticipantDelegate : NSObject
+- (NSInteger)_orientationMode;
 @end
 
 @interface SBIconView : UIView
@@ -48,7 +55,7 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 @end
 
 // =========================================================================
-// 1. iPhone SE (2016) Anti-Overlap Engine (No Labels + Exact Landscape Fit)
+// 1. iPhone SE (2016) Anti-Overlap Engine (No Text Labels + Spaced Compact Icons)
 // =========================================================================
 static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
@@ -78,8 +85,7 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     BOOL isWidget = (self.bounds.size.width > 95.0 || self.bounds.size.height > 95.0);
     BOOL isInDock = [NSStringFromClass([self.superview class]) containsString:@"Dock"];
 
-    // Exact scale math for iPhone SE 2016 (320x568 Portrait / 568x320 Landscape):
-    // In landscape, 5 rows fit inside ~200pt height -> 0.56 scale keeps clean spacing (waqfa) & 0% overlap
+    // Exact scale for iPhone SE 2016 (320x568 / 568x320) -> clean spacing (waqfa) & zero overlap
     CGFloat targetScale = 1.0;
     if (isWidget) {
         targetScale = isLandscape ? 0.62 : 0.92;
@@ -103,18 +109,52 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// 2. Crash-Free UIKit Window & ViewController Rotation (No homeScreenRotationStyle Crash)
+// 2. Scoped Pad Idiom + SpringBoard Rotation (Fixes 4-inch SE Crash)
 // =========================================================================
 %group PadSystemRotationHooks
 
+%hook UIDevice
+
+- (UIUserInterfaceIdiom)userInterfaceIdiom {
+    if (gForcePadIdiom > 0) {
+        return UIUserInterfaceIdiomPad;
+    }
+    return %orig;
+}
+
+%end
+
+%hook SBHDefaultIconListLayoutProvider
+
+- (instancetype)initWithScreenType:(NSUInteger)screenType {
+    // 4-inch SE screenType lacks landscape grid metrics in iOS 15 -> temporarily use Pad idiom to load valid landscape layout
+    gForcePadIdiom++;
+    id res = %orig;
+    gForcePadIdiom--;
+    return res;
+}
+
+%end
+
 %hook SpringBoard
+
+- (NSInteger)homeScreenRotationStyle {
+    return 1; // Bottom-dock landscape rotation (compatible with SE 2016 & Gestures.x)
+}
 
 - (BOOL)homeScreenSupportsRotation {
     return YES;
 }
 
-- (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindow:(UIWindow *)window {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
+%end
+
+%hook SBTraitsSceneParticipantDelegate
+
+- (NSInteger)_orientationMode {
+    gForcePadIdiom++;
+    NSInteger mode = %orig;
+    gForcePadIdiom--;
+    return mode;
 }
 
 %end
@@ -126,7 +166,25 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
+    gForcePadIdiom++;
+    UIInterfaceOrientationMask mask = %orig;
+    gForcePadIdiom--;
+    return mask | UIInterfaceOrientationMaskLandscape;
+}
+
+%end
+
+%hook SBRootFolderController
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    gForcePadIdiom++;
+    UIInterfaceOrientationMask mask = %orig;
+    gForcePadIdiom--;
+    return mask | UIInterfaceOrientationMaskLandscape;
 }
 
 %end
@@ -143,19 +201,7 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
 %end
 
-%hook SBRootFolderController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
-%hook CSCoverSheetViewController
+%hook SBCoverSheetPrimarySlidingViewController
 
 - (BOOL)shouldAutorotate {
     return YES;
@@ -168,18 +214,6 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 %hook CCUIModularControlCenterOverlayViewController
-
-- (BOOL)shouldAutorotate {
-    return YES;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return UIInterfaceOrientationMaskAllButUpsideDown;
-}
-
-%end
-
-%hook SBMainSwitcherViewController
 
 - (BOOL)shouldAutorotate {
     return YES;
