@@ -3,23 +3,27 @@
 #import <objc/runtime.h>
 
 #define kPadPrefsSuite @"com.elite.ios27"
+#define kPadBootGuardKey @"kPadBootInProgress"
 
 static BOOL gPadCompactIcons = YES;
 
-static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
+static NSUserDefaults *PadPrefs(void) {
     static NSUserDefaults *prefs = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         prefs = [[NSUserDefaults alloc] initWithSuiteName:kPadPrefsSuite];
     });
-    id val = [prefs objectForKey:key];
+    return prefs;
+}
+
+static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
+    id val = [PadPrefs() objectForKey:key];
     return val ? [val boolValue] : defaultVal;
 }
 
 @interface SpringBoard : UIApplication
 - (NSInteger)homeScreenRotationStyle;
 - (BOOL)homeScreenSupportsRotation;
-- (BOOL)homeScreenRotationStyleWantsUIKitRotation;
 @end
 
 @interface SBHomeScreenViewController : UIViewController
@@ -33,7 +37,7 @@ static BOOL PadBoolPref(NSString *key, BOOL defaultVal) {
 @end
 
 // =========================================================================
-// 1. iPhone SE (2016) Anti-Overlap Engine (No Labels + Smaller Spaced Icons)
+// 1. iPhone SE (2016) Anti-Overlap Engine (No Text Labels + Spaced Compact Icons)
 // =========================================================================
 static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 
@@ -48,13 +52,14 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 - (void)layoutSubviews {
     %orig;
 
-    @try {
+    // Safely hide icon text label only if ivar exists (prevents NSUndefinedKeyException)
+    if (class_getInstanceVariable([self class], "_labelView") != NULL) {
         UIView *labelView = [self valueForKey:@"_labelView"];
         if ([labelView isKindOfClass:[UIView class]] && !labelView.hidden) {
             labelView.hidden = YES;
             labelView.alpha = 0.0;
         }
-    } @catch (NSException *e) {}
+    }
 
     if (!gPadCompactIcons) return;
 
@@ -62,11 +67,12 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     BOOL isLandscape = (screenSize.width > screenSize.height);
     BOOL isWidget = (self.bounds.size.width > 95.0 || self.bounds.size.height > 95.0);
 
+    // Compact scaling for 320x568 / 568x320 SE 2016 screen -> clean waqfa & zero overlap
     CGFloat targetScale = 1.0;
     if (isWidget) {
-        targetScale = isLandscape ? 0.80 : 0.92;
+        targetScale = isLandscape ? 0.78 : 0.92;
     } else {
-        targetScale = isLandscape ? 0.74 : 0.84;
+        targetScale = isLandscape ? 0.72 : 0.84;
     }
 
     NSNumber *prevScale = objc_getAssociatedObject(self, kPadAppliedScaleKey);
@@ -83,21 +89,17 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// 2. GesturesXV-Compatible System Rotation (Style 2 + UIKit Rotation)
+// 2. Crash-Free Home Screen & Control Center Rotation (No iPad FloatingDock Crash)
 // =========================================================================
 %group PadSystemRotationHooks
 
 %hook SpringBoard
 
 - (NSInteger)homeScreenRotationStyle {
-    return 2; // UIKit bottom-dock rotation (Compatible with Gestures.x homeButtonType = 2)
+    return 1; // Safe native iPhone landscape rotation (Style 2 crashes without iPad FloatingDock)
 }
 
 - (BOOL)homeScreenSupportsRotation {
-    return YES;
-}
-
-- (BOOL)homeScreenRotationStyleWantsUIKitRotation {
     return YES;
 }
 
@@ -130,7 +132,7 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
 %end
 
 // =========================================================================
-// 3. Settings App (com.apple.Preferences) -> SE 2016 Mac/iPad Split View
+// 3. Settings App (com.apple.Preferences) -> Crash-Free 2-Pane Split View
 // =========================================================================
 %group PadSettingsAppHooks
 
@@ -168,6 +170,19 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     self.maximumPrimaryColumnWidth = 200.0;
 }
 
+- (void)viewWillLayoutSubviews {
+    %orig;
+    // Official UIKit child trait override (zero recursion/crash unlike overriding -traitCollection)
+    BOOL isLandscape = (self.view.bounds.size.width > self.view.bounds.size.height);
+    UITraitCollection *overrideTrait = isLandscape
+        ? [UITraitCollection traitCollectionWithHorizontalSizeClass:UIUserInterfaceSizeClassRegular]
+        : nil;
+
+    for (UIViewController *child in self.childViewControllers) {
+        [self setOverrideTraitCollection:overrideTrait forChildViewController:child];
+    }
+}
+
 - (BOOL)shouldAutorotate {
     return YES;
 }
@@ -176,37 +191,42 @@ static const void *kPadAppliedScaleKey = &kPadAppliedScaleKey;
     return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
-- (UITraitCollection *)traitCollection {
-    UITraitCollection *orig = %orig;
-    if (!orig) return orig;
-
-    CGSize screenSize = [UIScreen mainScreen].bounds.size;
-    if (screenSize.width > screenSize.height) {
-        UITraitCollection *regularW = [UITraitCollection traitCollectionWithHorizontalSizeClass:UIUserInterfaceSizeClassRegular];
-        if (regularW) {
-            return [UITraitCollection traitCollectionWithTraitsFromCollections:@[orig, regularW]];
-        }
-    }
-    return orig;
-}
-
 %end
 
 %end
 
 // =========================================================================
-// Constructor (Defaults to OFF on first install -> Guaranteed Clean Boot)
+// Constructor with Automatic Safe-Mode Boot Guard
 // =========================================================================
 %ctor {
     if (!PadBoolPref(@"kEnabled", YES)) return;
-    if (!PadBoolPref(@"kEnablePadMode", NO)) return;
-
-    gPadCompactIcons = PadBoolPref(@"kPadCompactIcons", YES);
+    if (!PadBoolPref(@"kEnablePadMode", NO)) {
+        [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
+        return;
+    }
 
     NSString *bundleID = [NSBundle mainBundle].bundleIdentifier;
 
     if ([bundleID isEqualToString:@"com.apple.springboard"]) {
+        // If previous SpringBoard launch crashed within 8s, auto-disable Pad Mode so phone never enters Safe Mode
+        if (PadBoolPref(kPadBootGuardKey, NO)) {
+            [PadPrefs() setBool:NO forKey:@"kEnablePadMode"];
+            [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
+            [PadPrefs() synchronize];
+            return;
+        }
+
+        [PadPrefs() setBool:YES forKey:kPadBootGuardKey];
+        [PadPrefs() synchronize];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [PadPrefs() setBool:NO forKey:kPadBootGuardKey];
+            [PadPrefs() synchronize];
+        });
+
+        gPadCompactIcons = PadBoolPref(@"kPadCompactIcons", YES);
         %init(PadSELayoutHooks);
+
         if (PadBoolPref(@"kPadRotateSystem", YES)) {
             %init(PadSystemRotationHooks);
         }
