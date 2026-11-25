@@ -13,5 +13,5 @@ iOS27_FRAMEWORKS = UIKit QuartzCore CoreGraphics ImageIO AVFoundation
 
 include $(THEOS)/makefiles/tweak.mk
 
-SUBPROJECTS += iOS27Prefs iOS27Camera
+SUBPROJECTS += iOS27Prefs iOS27Camera iOS27PadMode
 include $(THEOS_MAKE_PATH)/aggregate.mk
